@@ -30,13 +30,26 @@ impl FolderWatcher {
     fn compress_and_replace(&self, category: &str, file_path: &Path) {
         let filename = file_path.file_name().unwrap().to_str().unwrap();
         let folder_path = &self.folders[category];
-        let output_path = folder_path.join(format!("{}_{}.zst", category, filename));
-            
+        
+        // Get the relative path from the base folder
+        let relative_path = file_path.strip_prefix(folder_path).unwrap_or(Path::new(""));
+        let parent_path = relative_path.parent().unwrap_or(Path::new(""));
+        
+        // Create the output path maintaining the subfolder structure
+        let output_path = folder_path.join(parent_path).join(format!("{}_{}.zst", category, filename));
+        
+        // Ensure the subfolder exists
+        if let Some(parent) = output_path.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                println!("Failed to create directory {}: {:?}", parent.display(), e);
+                return;
+            }
+        }
 
-         if filename.ends_with(".zst") 
-         {
+        if filename.ends_with(".zst") 
+        {
             return;
-         }
+        }
 
         println!("Compressing file {:?} in folder {:?} -> {:?}", filename, folder_path, output_path);
 
@@ -57,11 +70,11 @@ impl FolderWatcher {
         let (tx, rx) = channel();
         let mut watcher = watcher(tx, Duration::from_secs(2))?;
 
-        // watch all folders (non-recursive,)
+        // watch all folders recursively to detect new subfolders
         for (_category, folder_path) in &self.folders {
             fs::create_dir_all(folder_path)?; // ensure folder exists
-            println!("Watching folder {:?}", folder_path);
-            watcher.watch(folder_path, RecursiveMode::NonRecursive)?;
+            println!("Watching folder {:?} recursively", folder_path);
+            watcher.watch(folder_path, RecursiveMode::Recursive)?;
         }
 
         loop {

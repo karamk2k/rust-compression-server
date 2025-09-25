@@ -17,7 +17,7 @@ async fn main() -> notify::Result<()> {
     let compressor = FileCompressor::default();
 
     let mut folders = HashMap::new();
-    folders.insert("file1".to_string(), "/home/karamk2k/Desktop/rust/compression/storage/file_1");
+    folders.insert("file1".to_string(), "C:/Users/karam/Desktop/Storge");
     // folders.insert("file2".to_string(), "storage/file2");
     // folders.insert("file3".to_string(), "storage/file3");
 

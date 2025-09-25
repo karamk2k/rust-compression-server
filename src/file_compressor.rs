@@ -11,7 +11,7 @@ pub struct FileCompressor {
 
 impl Default for FileCompressor {
     fn default() -> Self {
-        Self { level: 10 } // default zstd compression level
+        Self { level: 22 } // default zstd compression level
     }
 }
 
