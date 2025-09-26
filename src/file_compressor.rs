@@ -55,8 +55,9 @@ impl FileCompressor {
 
     /// Decompress a .zst file into memory
     pub fn decompress_file_to_bytes(&self, input_path: &str) -> std::io::Result<Vec<u8>> {
-        let base_dir = "/home/karamk2k/Desktop/rust/compression/storage/file_1";
-        let compressed_file = File::open(format!("{}/{}", base_dir, input_path))?;
+        // let base_dir = "/home/karamk2k/Desktop/rust/compression/storage/file_1";
+        let compressed_file = File::open(format!("{}",input_path))?;
+        print!("Decompressing file: {}\n", input_path);
         let mut decoder = Decoder::new(BufReader::new(compressed_file))?;
         let mut buf = Vec::new();
         decoder.read_to_end(&mut buf)?;

@@ -17,7 +17,7 @@ async fn main() -> notify::Result<()> {
     let compressor = FileCompressor::default();
 
     let mut folders = HashMap::new();
-    folders.insert("file1".to_string(), "C:/Users/karam/Desktop/Storge");
+    folders.insert("file1".to_string(), r"C:\Users\karam\OneDrive\Desktop\Storge");
     // folders.insert("file2".to_string(), "storage/file2");
     // folders.insert("file3".to_string(), "storage/file3");
 
@@ -25,8 +25,7 @@ async fn main() -> notify::Result<()> {
     std::thread::spawn(move || {
         watcher.watch().unwrap();
     });
-
-    // Start HTTP server
+    
     let server = Server::new(compressor);
     server.run().await;
     Ok(())
