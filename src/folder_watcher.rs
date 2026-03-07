@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::path::{Path, PathBuf};
 use std::fs;
 use crate::file_compressor::FileCompressor;
+use tracing::{error, info};
 
 /// Watches folders and compresses new files with FileCompressor
 pub struct FolderWatcher {
@@ -15,11 +16,12 @@ pub struct FolderWatcher {
 
 impl FolderWatcher {
     /// Create a new watcher
-    pub fn new(folders: HashMap<String, &str>, compressor: FileCompressor) -> Self {
-        let mut folder_paths = HashMap::new();
-        for (key, path) in folders {
-            folder_paths.insert(key, PathBuf::from(path));
-        }
+    pub fn new(folders: HashMap<String, String>, compressor: FileCompressor) -> Self {
+        let folder_paths = folders
+            .into_iter()
+            .map(|(key, path)| (key, PathBuf::from(path)))
+            .collect();
+
         Self {
             folders: folder_paths,
             compressor,
@@ -41,7 +43,7 @@ impl FolderWatcher {
         // Ensure the subfolder exists
         if let Some(parent) = output_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                println!("Failed to create directory {}: {:?}", parent.display(), e);
+                error!(path = %parent.display(), ?e, "failed to create directory");
                 return;
             }
         }
@@ -51,17 +53,22 @@ impl FolderWatcher {
             return;
         }
 
-        println!("Compressing file {:?} in folder {:?} -> {:?}", filename, folder_path, output_path);
+        info!(
+            file = %filename,
+            folder = %folder_path.display(),
+            output = %output_path.display(),
+            "compressing file"
+        );
 
         if let Err(e) = self.compressor.compress_file(file_path.to_str().unwrap(), output_path.to_str().unwrap()) {
-            println!("Failed to compress {}: {:?}", filename, e);
+            error!(file = %filename, ?e, "failed to compress file");
             return;
         }
 
         if let Err(e) = fs::remove_file(file_path) {
-            println!("Failed to remove original file {}: {:?}", filename, e);
+            error!(file = %filename, ?e, "failed to remove original file");
         } else {
-            println!("Compressed & replaced: {} -> {:?}", filename, output_path);
+            info!(file = %filename, output = %output_path.display(), "compressed and replaced file");
         }
     }
 
@@ -73,7 +80,7 @@ impl FolderWatcher {
         // watch all folders recursively to detect new subfolders
         for (_category, folder_path) in &self.folders {
             fs::create_dir_all(folder_path)?; // ensure folder exists
-            println!("Watching folder {:?} recursively", folder_path);
+            info!(folder = %folder_path.display(), "watching folder recursively");
             watcher.watch(folder_path, RecursiveMode::Recursive)?;
         }
 
@@ -91,7 +98,7 @@ impl FolderWatcher {
                     }
                     _ => {}
                 },
-                Err(e) => println!("watch error: {:?}", e),
+                Err(e) => error!(?e, "watch error"),
             }
         }
     }
