@@ -5,6 +5,7 @@ use sqlx::FromRow;
 pub struct FileRecord {
     pub id: i64,
     pub original_name: String,
+    pub folder_id: Option<i64>,
     pub stored_path: String,
     pub compressed_path: String,
     pub is_compressed: bool,
@@ -16,6 +17,7 @@ pub struct FileRecord {
 
 pub struct NewFileRecord<'a> {
     pub original_name: &'a str,
+    pub folder_id: Option<i64>,
     pub stored_path: &'a str,
     pub compressed_path: &'a str,
     pub is_compressed: bool,
@@ -28,6 +30,7 @@ pub struct NewFileRecord<'a> {
 pub struct UploadResult {
     pub id: i64,
     pub original_name: String,
+    pub folder_id: Option<i64>,
     pub stored_path: String,
     pub compressed_path: String,
     pub is_compressed: bool,

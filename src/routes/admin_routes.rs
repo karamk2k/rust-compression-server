@@ -14,7 +14,9 @@ use crate::app_state::AppState;
 use crate::auth::{
     authenticated_user_id, clear_session_cookie, session_id_from_headers, with_session_cookie,
 };
+use crate::db;
 use crate::models::file_model::FileRecord;
+use crate::models::folder_model::FolderListItem;
 use crate::services::auth_service::AuthService;
 use crate::services::file_service::FileService;
 
@@ -72,12 +74,16 @@ async fn get_files(State(state): State<AppState>, headers: HeaderMap) -> Respons
         Err(error) => return internal_error_page(&format!("failed to load user: {}", error)),
     };
 
-    let files = match file_service.list_files().await {
+    let files = match file_service.list_files_for_user(user_id, None).await {
         Ok(files) => files,
         Err(error) => return internal_error_page(&format!("failed to load files: {}", error)),
     };
+    let folders = match db::list_folders_for_user_and_parent(&state.db, user_id, None).await {
+        Ok(folders) => folders,
+        Err(error) => return internal_error_page(&format!("failed to load folders: {}", error)),
+    };
 
-    Html(render_files_page(&username, &files)).into_response()
+    Html(render_files_page(&username, &files, &folders)).into_response()
 }
 
 async fn post_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -256,9 +262,10 @@ fn render_login_page(error: Option<&str>) -> String {
     )
 }
 
-fn render_files_page(username: &str, files: &[FileRecord]) -> String {
+fn render_files_page(username: &str, files: &[FileRecord], folders: &[FolderListItem]) -> String {
     let username_json = serde_json::to_string(username).unwrap_or_else(|_| "\"admin\"".to_string());
     let initial_files_json = serde_json::to_string(files).unwrap_or_else(|_| "[]".to_string());
+    let initial_folders_json = serde_json::to_string(folders).unwrap_or_else(|_| "[]".to_string());
 
     let template = r##"<!doctype html>
 <html>
@@ -278,9 +285,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             --danger: #b91c1c;
             --shadow: 0 16px 34px rgba(16, 24, 40, 0.08);
         }
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
         body {
             margin: 0;
             font-family: "Sora", "Manrope", "Segoe UI", sans-serif;
@@ -290,11 +295,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                 radial-gradient(circle at 92% 6%, #d6ecff 0%, transparent 28%),
                 var(--bg);
         }
-        .shell {
-            max-width: 1240px;
-            margin: 22px auto 32px;
-            padding: 0 18px;
-        }
+        .shell { max-width: 1240px; margin: 22px auto 32px; padding: 0 18px; }
         .panel {
             background: var(--panel);
             border: 1px solid var(--line);
@@ -310,53 +311,111 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             gap: 12px;
             flex-wrap: wrap;
         }
-        .title {
-            margin: 0;
-            font-size: 30px;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-        }
-        .subtitle {
-            margin: 4px 0 0;
-            color: var(--muted);
-            font-size: 14px;
-        }
-        .top-actions {
+        .title { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
+        .subtitle { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+        .top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .upload-panel { padding: 20px; }
+        .upload-controls {
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .upload-panel {
-            padding: 20px;
-        }
-        .upload-row {
-            display: flex;
-            align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
-        }
-        .picker {
-            display: inline-flex;
             align-items: center;
-            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .drop-zone {
             border: 1px dashed #9ca3af;
-            border-radius: 10px;
-            padding: 8px 12px;
+            border-radius: 12px;
             background: #f8faff;
-            min-width: 280px;
+            min-height: 96px;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            color: var(--muted);
+            padding: 14px;
+            transition: border-color .2s ease, background .2s ease;
         }
-        .picker input[type=file] {
+        .drop-zone.active {
+            border-color: #2563eb;
+            background: #eaf2ff;
+            color: #1d4ed8;
+        }
+        .picker { display: inline-flex; align-items: center; gap: 8px; }
+        .picker input[type=file] { max-width: 300px; }
+        .hint { margin: 10px 0 0; color: #dc2626; font-size: 13px; }
+        .hint.ok { color: #2563eb; }
+        .nav-panel { padding: 16px; }
+        .nav-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .breadcrumbs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .crumb {
+            background: #eef2ff;
+            border: 0;
+            border-radius: 999px;
+            color: #1f2937;
             font-size: 12px;
-            max-width: 220px;
+            padding: 5px 10px;
+            cursor: pointer;
         }
-        .hint {
-            margin: 10px 0 0;
-            color: #dc2626;
-            font-size: 13px;
+        .crumb.current { background: #dbeafe; font-weight: 700; color: #1d4ed8; }
+        .folder-grid {
+            margin-top: 14px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
         }
-        .files-panel {
-            padding: 16px;
+        .folder-card {
+            border: 1px solid #c7d2fe;
+            border-radius: 12px;
+            background: #f8fbff;
+            padding: 12px;
+            transition: transform .15s ease, box-shadow .15s ease;
         }
+        .folder-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 18px rgba(37, 99, 235, 0.14);
+        }
+        .folder-card.drop-target {
+            border-color: #2563eb;
+            background: #e8f0ff;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+        }
+        .folder-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .folder-open {
+            border: 0;
+            padding: 0;
+            margin: 0;
+            background: transparent;
+            color: #1f2937;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: left;
+        }
+        .folder-open:hover { color: #1d4ed8; }
+        .folder-title { margin: 0; font-size: 14px; color: #1f2937; }
+        .folder-meta { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+        .folder-actions {
+            margin-top: 10px;
+            display: flex;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+        .crumb.drop-target {
+            outline: 2px solid #2563eb;
+            outline-offset: 1px;
+            background: #dbeafe;
+        }
+        .files-panel { padding: 16px; }
         .section-head {
             display: flex;
             justify-content: space-between;
@@ -364,17 +423,8 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             gap: 10px;
             padding: 6px 8px 14px;
         }
-        .section-head h2 {
-            margin: 0;
-            font-size: 21px;
-        }
-        .section-stats {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
+        .section-head h2 { margin: 0; font-size: 21px; }
+        .section-stats { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
         .count {
             font-size: 13px;
             color: var(--muted);
@@ -402,6 +452,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             box-shadow: 0 8px 20px rgba(29, 78, 216, 0.08);
             transition: transform .18s ease, box-shadow .18s ease;
         }
+        .file-card.dragging { opacity: 0.55; }
         .file-card:hover {
             transform: translateY(-3px);
             box-shadow: 0 16px 30px rgba(29, 78, 216, 0.15);
@@ -434,18 +485,9 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             color: #0f172a;
             background: #e2e8f0;
         }
-        .fallback-doc {
-            background: #dbeafe;
-            border-color: #2563eb;
-        }
-        .fallback-audio {
-            background: #fee2e2;
-            border-color: #ef4444;
-        }
-        .fallback-archive {
-            background: #fef3c7;
-            border-color: #f59e0b;
-        }
+        .fallback-doc { background: #dbeafe; border-color: #2563eb; }
+        .fallback-audio { background: #fee2e2; border-color: #ef4444; }
+        .fallback-archive { background: #fef3c7; border-color: #f59e0b; }
         .chip {
             position: absolute;
             right: 10px;
@@ -457,9 +499,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             padding: 4px 8px;
             border-radius: 999px;
         }
-        .content {
-            padding: 12px;
-        }
+        .content { padding: 12px; }
         .content h3 {
             margin: 0;
             font-size: 14px;
@@ -467,40 +507,19 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .meta {
-            margin: 6px 0 0;
-            font-size: 12px;
-            color: var(--muted);
-        }
-        .card-actions {
-            margin-top: 10px;
-            display: flex;
-            gap: 7px;
-        }
-        button,
-        .view {
+        .meta { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+        .card-actions { margin-top: 10px; display: flex; gap: 7px; }
+        button, .view {
             border: 0;
             border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
             transition: opacity .16s ease;
         }
-        button:hover,
-        .view:hover {
-            opacity: 0.88;
-        }
-        .primary {
-            background: var(--primary);
-            color: white;
-            padding: 10px 14px;
-            font-size: 13px;
-        }
-        .ghost {
-            background: #e2e8f0;
-            color: #0f172a;
-            padding: 9px 13px;
-            font-size: 13px;
-        }
+        button:hover, .view:hover { opacity: 0.88; }
+        .primary { background: var(--primary); color: white; padding: 10px 14px; font-size: 13px; }
+        .ghost { background: #e2e8f0; color: #0f172a; padding: 9px 13px; font-size: 13px; }
+        .ghost:disabled { opacity: 0.55; cursor: not-allowed; }
         .ghost-link {
             display: inline-flex;
             align-items: center;
@@ -512,21 +531,9 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             font-size: 13px;
             border-radius: 8px;
             font-weight: 600;
-            transition: opacity .16s ease;
         }
-        .ghost-link:hover {
-            opacity: 0.88;
-        }
-        .danger {
-            background: var(--danger);
-            color: white;
-            padding: 9px 13px;
-            font-size: 13px;
-        }
-        .small {
-            padding: 6px 11px;
-            font-size: 12px;
-        }
+        .danger { background: var(--danger); color: white; padding: 9px 13px; font-size: 13px; }
+        .small { padding: 6px 11px; font-size: 12px; }
         .view {
             display: inline-flex;
             align-items: center;
@@ -559,16 +566,10 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
             font-size: 14px;
         }
         @media (max-width: 760px) {
-            .title {
-                font-size: 24px;
-            }
-            .preview img,
-            .preview video {
-                height: 164px;
-            }
-            .picker {
-                min-width: 100%;
-            }
+            .title { font-size: 24px; }
+            .preview img, .preview video { height: 164px; }
+            .upload-controls { align-items: stretch; }
+            .picker input[type=file] { max-width: 100%; }
         }
     </style>
 </head>
@@ -583,37 +584,96 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                 <a class="ghost-link" href="/admin/logs/view" target="_blank" rel="noopener">View Logs</a>
                 <a class="ghost-link" href="/admin/logs/download">Download Logs</a>
                 <button class="ghost" type="button" @click="clearLogs">Clear Logs</button>
-                <button class="ghost" type="button" @click="refreshFiles">Refresh</button>
+                <button class="ghost" type="button" @click="refreshCurrentFolder">Refresh</button>
                 <button class="danger" type="button" @click="logout">Logout</button>
             </div>
         </header>
 
         <section class="upload-panel panel">
-            <form class="upload-row" @submit.prevent="submitUpload">
+            <div class="upload-controls">
                 <label class="picker">
-                    <input ref="fileInput" type="file" @change="onFileChange" required>
-                    <span v-text="selectedFileName || 'Choose file to upload'"></span>
+                    <input ref="fileInput" type="file" multiple @change="onFileChange">
                 </label>
-                <button class="primary" type="submit" :disabled="uploading || !selectedFile">
+                <button class="primary" type="button" :disabled="uploading || selectedFiles.length === 0" @click="submitUpload">
                     <span v-if="uploading">Uploading...</span>
-                    <span v-else>Upload & Compress</span>
+                    <span v-else>Upload {{ selectedFiles.length > 1 ? selectedFiles.length + ' Files' : 'Files' }}</span>
                 </button>
-            </form>
+                <button class="ghost" type="button" :disabled="uploading || selectedFiles.length === 0" @click="clearSelectedFiles">Clear</button>
+            </div>
+            <div class="drop-zone" :class="{ active: dragActive }" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
+                <span v-if="selectedFiles.length === 0">Drag and drop files here, or use picker (multi-select works on mobile picker too).</span>
+                <span v-else>{{ selectedFiles.length }} file(s) selected</span>
+            </div>
             <p class="hint" v-if="uploadError" v-text="uploadError"></p>
+            <p class="hint ok" v-if="uploadStatus" v-text="uploadStatus"></p>
+        </section>
+
+        <section class="nav-panel panel">
+            <div class="nav-row">
+                <div class="breadcrumbs">
+                    <button
+                        class="crumb"
+                        :class="{ current: currentFolderId === null, 'drop-target': folderDropTargetId === 'root' }"
+                        @click="openRoot"
+                        @dragover.prevent="onRootDragOver"
+                        @dragleave="onRootDragLeave"
+                        @drop.prevent="onRootDrop"
+                    >Root</button>
+                    <template v-for="(node, index) in folderPath" :key="node.id">
+                        <span>/</span>
+                        <button class="crumb" :class="{ current: index === folderPath.length - 1 }" @click="openPath(index)">{{ node.name }}</button>
+                    </template>
+                </div>
+                <div class="top-actions">
+                    <button class="ghost" type="button" :disabled="currentFolderId === null" @click="goUp">Up</button>
+                    <button class="primary" type="button" @click="createFolder">New Folder</button>
+                </div>
+            </div>
+            <div class="folder-grid" v-if="folders.length > 0">
+                <article
+                    class="folder-card"
+                    :class="{ 'drop-target': folderDropTargetId === folder.id }"
+                    v-for="folder in folders"
+                    :key="folder.id"
+                    @dragover.prevent="onFolderDragOver(folder.id, $event)"
+                    @dragleave="onFolderDragLeave(folder.id, $event)"
+                    @drop.prevent="onFolderDrop(folder, $event)"
+                >
+                    <div class="folder-head">
+                        <button class="folder-open" type="button" @click="openFolder(folder)">[Folder] {{ folder.name }}</button>
+                    </div>
+                    <p class="folder-meta">{{ folder.file_count }} item(s)</p>
+                    <p class="folder-meta">Created: {{ folder.created_at }}</p>
+                    <p class="folder-meta">ID: {{ folder.id }}</p>
+                    <div class="folder-actions">
+                        <button class="ghost small" type="button" @click="renameFolder(folder)">Rename</button>
+                        <button class="ghost small" type="button" @click="moveFolder(folder)">Move</button>
+                        <button class="danger small" type="button" @click="deleteFolder(folder)">Delete</button>
+                    </div>
+                </article>
+            </div>
+            <div class="empty-state" v-else>No subfolders here.</div>
         </section>
 
         <section class="files-panel panel">
             <div class="section-head">
                 <h2>Files</h2>
                 <div class="section-stats">
-                    <span class="count" v-text="files.length + ' items'"></span>
-                    <span class="summary" v-text="'Total original: ' + formatBytes(totalOriginalBytes())"></span>
-                    <span class="summary" v-text="'Total stored: ' + formatBytes(totalStoredBytes())"></span>
+                    <span class="count" v-text="displayItemCountText()"></span>
+                    <span class="summary" v-text="'Total original: ' + formatBytes(displayOriginalBytes())"></span>
+                    <span class="summary" v-text="'Total stored: ' + formatBytes(displayStoredBytes())"></span>
                 </div>
             </div>
-
             <div class="grid" v-if="files.length > 0">
-                <article class="file-card" v-for="file in files" :key="file.id">
+                <article
+                    class="file-card"
+                    :class="{ dragging: draggingFileId === file.id }"
+                    v-for="file in files"
+                    :key="file.id"
+                    draggable="true"
+                    @dragstart="onFileDragStart(file, $event)"
+                    @dragend="onFileDragEnd"
+                >
                     <div class="preview">
                         <img v-if="isImage(file.original_name)" :src="viewUrl(file.id)" :alt="file.original_name" loading="lazy">
                         <video v-else-if="isVideo(file.original_name)" :src="viewUrl(file.id)" muted preload="metadata"></video>
@@ -640,13 +700,14 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                     </div>
                 </article>
             </div>
-            <div class="empty-state" v-else>No files yet. Upload your first file.</div>
+            <div class="empty-state" v-else>No files in this folder yet.</div>
         </section>
     </div>
 
     <script>
         const currentUser = __USERNAME__;
         const initialFiles = __INITIAL_FILES__;
+        const initialFolders = __INITIAL_FOLDERS__;
 
         const extension = (fileName) => {
             const index = fileName.lastIndexOf(".");
@@ -659,11 +720,22 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                 return {
                     username: currentUser,
                     files: initialFiles,
-                    selectedFile: null,
-                    selectedFileName: "",
+                    folders: initialFolders,
+                    folderPath: [],
+                    currentFolderId: null,
+                    selectedFiles: [],
                     uploading: false,
                     uploadError: "",
+                    uploadStatus: "",
                     deleting: {},
+                    dragActive: false,
+                    draggingFileId: null,
+                    folderDropTargetId: null,
+                    fileSummary: {
+                        total_files: initialFiles.length,
+                        total_original_size: initialFiles.reduce((sum, file) => sum + (Number(file.original_size) || 0), 0),
+                        total_stored_size: initialFiles.reduce((sum, file) => sum + (Number(file.compressed_size) || 0), 0),
+                    },
                 };
             },
             methods: {
@@ -709,76 +781,376 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                 totalStoredBytes() {
                     return this.files.reduce((sum, file) => sum + (Number(file.compressed_size) || 0), 0);
                 },
+                displayItemCountText() {
+                    if (this.currentFolderId === null) {
+                        return this.fileSummary.total_files + " items (all folders)";
+                    }
+                    return this.files.length + " items";
+                },
+                displayOriginalBytes() {
+                    if (this.currentFolderId === null) {
+                        return Number(this.fileSummary.total_original_size) || 0;
+                    }
+                    return this.totalOriginalBytes();
+                },
+                displayStoredBytes() {
+                    if (this.currentFolderId === null) {
+                        return Number(this.fileSummary.total_stored_size) || 0;
+                    }
+                    return this.totalStoredBytes();
+                },
                 storageLabel(file) {
-                    if (file.is_compressed) {
-                        return "zstd compressed";
-                    }
-                    if (file.compressed_size < file.original_size) {
-                        return "media transcoded";
-                    }
+                    if (file.is_compressed) return "zstd compressed";
+                    if (file.compressed_size < file.original_size) return "media transcoded";
                     return "kept original (already optimized)";
                 },
-                viewUrl(fileId) {
-                    return "/api/files/" + fileId + "/view";
-                },
-                downloadUrl(fileId) {
-                    return "/api/files/" + fileId + "/download";
+                viewUrl(fileId) { return "/api/files/" + fileId + "/view"; },
+                downloadUrl(fileId) { return "/api/files/" + fileId + "/download"; },
+                currentParentId() {
+                    if (this.currentFolderId === null) return null;
+                    if (this.folderPath.length < 2) return null;
+                    return this.folderPath[this.folderPath.length - 2].id;
                 },
                 async refreshFiles() {
-                    const response = await fetch("/api/files");
+                    const query = this.currentFolderId === null ? "" : ("?folder_id=" + this.currentFolderId);
+                    const response = await fetch("/api/files" + query);
                     if (response.status === 401) {
                         window.location.href = "/admin/login";
                         return;
                     }
                     if (!response.ok) {
-                        return;
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to refresh files");
                     }
                     this.files = await response.json();
                 },
-                onFileChange(event) {
-                    const file = event.target.files && event.target.files[0] ? event.target.files[0] : null;
-                    this.selectedFile = file;
-                    this.selectedFileName = file ? file.name : "";
+                async refreshFolders() {
+                    const query = this.currentFolderId === null ? "" : ("?parent_id=" + this.currentFolderId);
+                    const response = await fetch("/api/folders" + query);
+                    if (response.status === 401) {
+                        window.location.href = "/admin/login";
+                        return;
+                    }
+                    if (!response.ok) {
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to refresh folders");
+                    }
+                    this.folders = await response.json();
                 },
-                async submitUpload() {
-                    if (!this.selectedFile) {
+                async refreshFolderPath() {
+                    if (this.currentFolderId === null) {
+                        this.folderPath = [];
+                        return;
+                    }
+                    const response = await fetch("/api/folders/path?folder_id=" + this.currentFolderId);
+                    if (!response.ok) {
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to refresh folder path");
+                    }
+                    this.folderPath = await response.json();
+                },
+                async refreshFileSummary() {
+                    const response = await fetch("/api/files/summary");
+                    if (response.status === 401) {
+                        window.location.href = "/admin/login";
+                        return;
+                    }
+                    if (!response.ok) {
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to refresh total summary");
+                    }
+                    this.fileSummary = await response.json();
+                },
+                async refreshCurrentFolder() {
+                    this.uploadError = "";
+                    await Promise.all([
+                        this.refreshFolders(),
+                        this.refreshFiles(),
+                        this.refreshFolderPath(),
+                        this.refreshFileSummary(),
+                    ]);
+                },
+                openFolder(folder) {
+                    this.currentFolderId = folder.id;
+                    this.refreshCurrentFolder().catch((err) => {
+                        this.uploadError = err && err.message ? err.message : "Failed to open folder";
+                    });
+                },
+                openRoot() {
+                    this.currentFolderId = null;
+                    this.refreshCurrentFolder().catch((err) => {
+                        this.uploadError = err && err.message ? err.message : "Failed to open root";
+                    });
+                },
+                openPath(index) {
+                    if (index < 0) {
+                        this.openRoot();
+                        return;
+                    }
+                    const node = this.folderPath[index];
+                    if (!node) return;
+                    this.currentFolderId = node.id;
+                    this.refreshCurrentFolder().catch((err) => {
+                        this.uploadError = err && err.message ? err.message : "Failed to open folder";
+                    });
+                },
+                goUp() {
+                    if (this.currentFolderId === null) return;
+                    this.currentFolderId = this.currentParentId();
+                    this.refreshCurrentFolder().catch((err) => {
+                        this.uploadError = err && err.message ? err.message : "Failed to navigate up";
+                    });
+                },
+                async renameFolder(folder) {
+                    const raw = window.prompt("New folder name", folder.name);
+                    if (raw === null) return;
+
+                    const name = raw.trim();
+                    if (!name || name === folder.name) return;
+
+                    const response = await fetch("/api/folders/" + folder.id, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name }),
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        this.uploadError = data.error || "Failed to rename folder";
                         return;
                     }
 
-                    this.uploading = true;
                     this.uploadError = "";
+                    await Promise.all([this.refreshFolders(), this.refreshFolderPath()]);
+                },
+                async moveFolder(folder) {
+                    const raw = window.prompt(
+                        "Move folder to parent ID.\n- Leave empty to move to root\n- Example: 12",
+                        folder.parent_id === null ? "" : String(folder.parent_id)
+                    );
+                    if (raw === null) return;
 
-                    const body = new FormData();
-                    body.append("file", this.selectedFile);
-
-                    try {
-                        const response = await fetch("/api/upload", { method: "POST", body });
-                        if (!response.ok) {
-                            const data = await response.json().catch(() => ({}));
-                            if (response.status === 413) {
-                                this.uploadError = "File is too large for current upload limit.";
-                            } else {
-                                this.uploadError = data.error || `Upload failed (HTTP ${response.status})`;
-                            }
+                    const trimmed = raw.trim();
+                    let parentId = null;
+                    if (trimmed !== "") {
+                        const parsed = Number.parseInt(trimmed, 10);
+                        if (!Number.isInteger(parsed) || parsed <= 0) {
+                            this.uploadError = "Parent ID must be a positive number or empty for root";
                             return;
                         }
-                        await this.refreshFiles();
-                        this.selectedFile = null;
-                        this.selectedFileName = "";
-                        if (this.$refs.fileInput) {
-                            this.$refs.fileInput.value = "";
+                        parentId = parsed;
+                    }
+
+                    const response = await fetch("/api/folders/" + folder.id, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ parent_id: parentId }),
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        this.uploadError = data.error || "Failed to move folder";
+                        return;
+                    }
+
+                    this.uploadError = "";
+                    await Promise.all([this.refreshFolders(), this.refreshFolderPath()]);
+                },
+                async deleteFolder(folder) {
+                    if (!window.confirm("Delete folder " + folder.name + "? (folder must be empty)")) return;
+
+                    const response = await fetch("/api/folders/" + folder.id, { method: "DELETE" });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        this.uploadError = data.error || "Failed to delete folder";
+                        return;
+                    }
+
+                    this.uploadError = "";
+                    await Promise.all([this.refreshFolders(), this.refreshFolderPath()]);
+                },
+                onFileDragStart(file, event) {
+                    this.draggingFileId = file.id;
+                    if (event.dataTransfer) {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", String(file.id));
+                    }
+                },
+                onFileDragEnd() {
+                    this.draggingFileId = null;
+                    this.folderDropTargetId = null;
+                },
+                parseDraggedFileId(event) {
+                    if (this.draggingFileId !== null) return this.draggingFileId;
+                    if (!event.dataTransfer) return null;
+                    const raw = event.dataTransfer.getData("text/plain");
+                    const parsed = Number.parseInt(raw, 10);
+                    if (!Number.isInteger(parsed) || parsed <= 0) return null;
+                    return parsed;
+                },
+                onFolderDragOver(folderId, event) {
+                    const fileId = this.parseDraggedFileId(event);
+                    if (fileId === null) return;
+                    this.folderDropTargetId = folderId;
+                    if (event.dataTransfer) {
+                        event.dataTransfer.dropEffect = "move";
+                    }
+                },
+                onFolderDragLeave(folderId) {
+                    if (this.folderDropTargetId === folderId) {
+                        this.folderDropTargetId = null;
+                    }
+                },
+                async onFolderDrop(folder, event) {
+                    const fileId = this.parseDraggedFileId(event);
+                    this.folderDropTargetId = null;
+                    this.draggingFileId = null;
+                    if (fileId === null) return;
+                    await this.moveFileById(fileId, folder.id);
+                },
+                onRootDragOver(event) {
+                    const fileId = this.parseDraggedFileId(event);
+                    if (fileId === null) return;
+                    this.folderDropTargetId = "root";
+                    if (event.dataTransfer) {
+                        event.dataTransfer.dropEffect = "move";
+                    }
+                },
+                onRootDragLeave() {
+                    if (this.folderDropTargetId === "root") {
+                        this.folderDropTargetId = null;
+                    }
+                },
+                async onRootDrop(event) {
+                    const fileId = this.parseDraggedFileId(event);
+                    this.folderDropTargetId = null;
+                    this.draggingFileId = null;
+                    if (fileId === null) return;
+                    await this.moveFileById(fileId, null);
+                },
+                async moveFileById(fileId, folderId) {
+                    const response = await fetch("/api/files/" + fileId + "/move", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ folder_id: folderId }),
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        this.uploadError = data.error || "Failed to move file";
+                        return;
+                    }
+
+                    this.uploadError = "";
+                    this.uploadStatus = "File moved.";
+                    await this.refreshCurrentFolder();
+                },
+                collectSelectedFiles(fileList) {
+                    this.selectedFiles = Array.from(fileList || []);
+                },
+                onFileChange(event) {
+                    this.collectSelectedFiles(event.target.files);
+                },
+                onDragOver() {
+                    this.dragActive = true;
+                },
+                onDragLeave() {
+                    this.dragActive = false;
+                },
+                onDrop(event) {
+                    this.dragActive = false;
+                    this.collectSelectedFiles(event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files : []);
+                },
+                clearSelectedFiles() {
+                    this.selectedFiles = [];
+                    if (this.$refs.fileInput) this.$refs.fileInput.value = "";
+                },
+                async createFolder() {
+                    const raw = window.prompt("Folder name");
+                    if (!raw) return;
+                    const payload = { name: raw.trim(), parent_id: this.currentFolderId };
+                    if (!payload.name) return;
+                    const response = await fetch("/api/folders", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        this.uploadError = data.error || "Failed to create folder";
+                        return;
+                    }
+                    await this.refreshFolders();
+                },
+                async enqueueUpload(file) {
+                    const body = new FormData();
+                    if (this.currentFolderId !== null) {
+                        body.append("folder_id", String(this.currentFolderId));
+                    }
+                    body.append("file", file);
+
+                    const response = await fetch("/api/upload", { method: "POST", body });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        if (response.status === 413) {
+                            throw new Error("File is too large for current upload limit.");
                         }
-                    } catch (_err) {
-                        this.uploadError = "Network error while uploading";
+                        throw new Error(data.error || `Upload failed (HTTP ${response.status})`);
+                    }
+                    if (!data.job_id) {
+                        throw new Error("Upload queued without a valid job ID.");
+                    }
+                    return data.job_id;
+                },
+                async waitForUploadJob(jobId) {
+                    const startedAt = Date.now();
+                    const timeoutMs = 60 * 60 * 1000;
+
+                    while (Date.now() - startedAt < timeoutMs) {
+                        const response = await fetch("/api/jobs/" + jobId);
+                        if (response.status === 401) {
+                            window.location.href = "/admin/login";
+                            throw new Error("Session expired. Please sign in again.");
+                        }
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.error || `Job status failed (HTTP ${response.status})`);
+                        }
+
+                        if (data.status === "done") return;
+                        if (data.status === "failed") {
+                            throw new Error(data.error || "Upload processing failed.");
+                        }
+
+                        await new Promise((resolve) => setTimeout(resolve, 1200));
+                    }
+
+                    throw new Error("Upload processing timed out. Check status again later.");
+                },
+                async submitUpload() {
+                    if (this.selectedFiles.length === 0) return;
+                    this.uploading = true;
+                    this.uploadError = "";
+                    this.uploadStatus = "";
+                    const total = this.selectedFiles.length;
+
+                    try {
+                        for (let i = 0; i < total; i += 1) {
+                            const file = this.selectedFiles[i];
+                            this.uploadStatus = `Uploading (${i + 1}/${total}): ${file.name}`;
+                            const jobId = await this.enqueueUpload(file);
+                            this.uploadStatus = `Processing (${i + 1}/${total}): ${file.name}`;
+                            await this.waitForUploadJob(jobId);
+                        }
+                        await this.refreshCurrentFolder();
+                        this.clearSelectedFiles();
+                        this.uploadStatus = `Done: ${total} file(s) uploaded.`;
+                    } catch (err) {
+                        this.uploadError = err && err.message ? err.message : "Upload failed";
+                        this.uploadStatus = "";
                     } finally {
                         this.uploading = false;
                     }
                 },
                 async deleteFile(file) {
-                    if (!window.confirm("Delete " + file.original_name + "?")) {
-                        return;
-                    }
-
+                    if (!window.confirm("Delete " + file.original_name + "?")) return;
                     this.deleting[file.id] = true;
                     try {
                         const response = await fetch("/api/files/" + file.id, { method: "DELETE" });
@@ -795,9 +1167,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                     }
                 },
                 async clearLogs() {
-                    if (!window.confirm("Clear application log file?")) {
-                        return;
-                    }
+                    if (!window.confirm("Clear application log file?")) return;
                     try {
                         const response = await fetch("/admin/logs/clear", { method: "POST" });
                         if (response.status === 401) {
@@ -821,7 +1191,9 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
                 },
             },
             mounted() {
-                this.refreshFiles();
+                this.refreshCurrentFolder().catch((err) => {
+                    this.uploadError = err && err.message ? err.message : "Failed to initialize dashboard";
+                });
             },
         }).mount("#app");
     </script>
@@ -831,6 +1203,7 @@ fn render_files_page(username: &str, files: &[FileRecord]) -> String {
     template
         .replace("__USERNAME__", &username_json)
         .replace("__INITIAL_FILES__", &initial_files_json)
+        .replace("__INITIAL_FOLDERS__", &initial_folders_json)
 }
 
 fn internal_error_page(message: &str) -> Response {

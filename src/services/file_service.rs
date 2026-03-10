@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use sqlx::SqlitePool;
@@ -41,23 +41,24 @@ impl FileService {
         }
     }
 
-    pub async fn upload_and_compress(
+    pub async fn upload_and_compress_from_path(
         &self,
         file_name: Option<&str>,
-        bytes: &[u8],
-        uploaded_by: i64
+        input_path: &Path,
+        uploaded_by: i64,
+        folder_id: Option<i64>,
     ) -> Result<UploadResult> {
         let original_name = file_name
             .map(sanitize_filename)
             .unwrap_or_else(|| "upload.bin".to_string());
         let ext = file_extension(&original_name);
 
-        let original_size = bytes.len() as i64;
+        let original_size = tokio::fs::metadata(input_path).await?.len() as i64;
         let stored_filename = format!("{}_{}", Uuid::new_v4(), original_name);
         let stored_path = self.upload_dir.join(&stored_filename);
         let stored_path_str = stored_path.to_string_lossy().to_string();
 
-        tokio::fs::write(&stored_path, bytes).await?;
+        move_file_to_destination(input_path, &stored_path).await?;
 
         let mut compressed_path_str = stored_path_str.clone();
         let mut compressed_size = original_size;
@@ -92,10 +93,10 @@ impl FileService {
 
                 if self.storage_backend == StorageBackend::Local {
                     let cleanup_service = self.clone();
-                    let cleanup_name = stored_filename.clone();
+                    let cleanup_path = stored_path_str.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = cleanup_service.delete_original_file(&cleanup_name).await {
-                            error!(file = %cleanup_name, ?e, "background delete failed");
+                        if let Err(e) = cleanup_service.delete_by_path(&cleanup_path).await {
+                            error!(file = %cleanup_path, ?e, "background delete failed");
                         }
                     });
                 }
@@ -144,6 +145,7 @@ impl FileService {
             &self.db,
             &(NewFileRecord {
                 original_name: &original_name,
+                folder_id,
                 stored_path: &db_stored_path,
                 compressed_path: &db_compressed_path,
                 is_compressed,
@@ -156,6 +158,7 @@ impl FileService {
         Ok(UploadResult {
             id: file_id,
             original_name,
+            folder_id,
             stored_path: db_stored_path,
             compressed_path: db_compressed_path,
             is_compressed,
@@ -164,8 +167,12 @@ impl FileService {
         })
     }
 
-    pub async fn list_files(&self) -> Result<Vec<FileRecord>> {
-        let files = db::list_files(&self.db).await?;
+    pub async fn list_files_for_user(
+        &self,
+        user_id: i64,
+        folder_id: Option<i64>,
+    ) -> Result<Vec<FileRecord>> {
+        let files = db::list_files_for_user_and_folder(&self.db, user_id, folder_id).await?;
         Ok(files)
     }
 
@@ -204,22 +211,31 @@ impl FileService {
         Ok(Some((file_name, bytes)))
     }
 
-    pub async fn delete_file_by_id(&self, file_id: i64) -> Result<bool> {
+    pub async fn delete_file_by_id(&self, file_id: i64, user_id: i64) -> Result<bool> {
         let Some(file) = self.get_file_by_id(file_id).await? else {
             return Ok(false);
         };
-
-        self.delete_by_path(&file.stored_path).await?;
-        if file.compressed_path != file.stored_path {
-            self.delete_by_path(&file.compressed_path).await?;
+        if file.uploaded_by != user_id {
+            return Ok(false);
         }
-        let deleted = db::delete_file_by_id(&self.db, file_id).await?;
-        Ok(deleted)
-    }
 
-    pub async fn delete_original_file(&self, file_name: &str) -> Result<()> {
-        let path = self.upload_dir.join(file_name);
-        self.delete_by_path(path.to_string_lossy().as_ref()).await
+        // upload_jobs.file_id references files.id, so clear those links first.
+        db::clear_upload_job_file_refs(&self.db, file_id).await?;
+        let deleted = db::delete_file_by_id_for_user(&self.db, file_id, user_id).await?;
+        if !deleted {
+            return Ok(false);
+        }
+
+        if let Err(e) = self.delete_by_path(&file.stored_path).await {
+            error!(file = %file.stored_path, ?e, "failed to delete stored file after DB delete");
+        }
+        if file.compressed_path != file.stored_path {
+            if let Err(e) = self.delete_by_path(&file.compressed_path).await {
+                error!(file = %file.compressed_path, ?e, "failed to delete compressed file after DB delete");
+            }
+        }
+
+        Ok(deleted)
     }
 
     async fn delete_by_path(&self, file_path: &str) -> Result<()> {
@@ -281,6 +297,29 @@ fn file_extension(file_name: &str) -> String {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase()
+}
+
+async fn move_file_to_destination(source: &Path, destination: &Path) -> Result<()> {
+    if source == destination {
+        return Ok(());
+    }
+
+    match tokio::fs::rename(source, destination).await {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            tokio::fs::copy(source, destination).await.map_err(|copy_error| {
+                anyhow!(
+                    "failed to move file from {} to {} (rename: {}; copy: {})",
+                    source.display(),
+                    destination.display(),
+                    rename_error,
+                    copy_error
+                )
+            })?;
+            tokio::fs::remove_file(source).await?;
+            Ok(())
+        }
+    }
 }
 
 fn should_try_zstd(ext: &str) -> bool {

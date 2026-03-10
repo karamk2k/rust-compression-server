@@ -24,6 +24,7 @@ use server::Server;
 use services::auth_service::AuthService;
 use services::media_transcode_service::MediaTranscodeService;
 use services::r2_storage_service::R2StorageService;
+use services::upload_job_worker;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{error, info};
 
@@ -79,6 +80,8 @@ async fn main() -> Result<()> {
         upload_dir: config.upload_dir.clone().into(),
         log_file: config.log_file.clone().into(),
     };
+
+    upload_job_worker::spawn(state.clone());
 
     let watcher = FolderWatcher::new(config.watch_folders.clone(), compressor.clone());
     std::thread::spawn(move || {
