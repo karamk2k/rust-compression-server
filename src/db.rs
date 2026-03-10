@@ -139,6 +139,29 @@ pub async fn list_files_for_user_and_folder(
     .await
 }
 
+pub async fn list_files_for_user_and_folder_page(
+    pool: &SqlitePool,
+    user_id: i64,
+    folder_id: Option<i64>,
+    cursor: Option<i64>,
+    limit: i64,
+) -> Result<Vec<FileRecord>, sqlx::Error> {
+    sqlx::query_as::<_, FileRecord>(
+        "SELECT id, original_name, folder_id, stored_path, compressed_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
+         FROM files \
+         WHERE uploaded_by = ?1 \
+           AND ((?2 IS NULL AND folder_id IS NULL) OR folder_id = ?2) \
+           AND (?3 IS NULL OR id < ?3) \
+         ORDER BY id DESC LIMIT ?4",
+    )
+    .bind(user_id)
+    .bind(folder_id)
+    .bind(cursor)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn summarize_files_for_user(
     pool: &SqlitePool,
     user_id: i64,
@@ -220,6 +243,22 @@ pub async fn list_folders_for_user_and_parent(
     )
     .bind(user_id)
     .bind(parent_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_all_folders_with_counts_for_user(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Vec<FolderListItem>, sqlx::Error> {
+    sqlx::query_as::<_, FolderListItem>(
+        "SELECT f.id, f.name, f.parent_id, f.created_by, f.created_at, \
+            (SELECT COUNT(1) FROM files fl WHERE fl.uploaded_by = f.created_by AND fl.folder_id = f.id) AS file_count \
+         FROM folders f \
+         WHERE f.created_by = ?1 \
+         ORDER BY f.name COLLATE NOCASE ASC",
+    )
+    .bind(user_id)
     .fetch_all(pool)
     .await
 }

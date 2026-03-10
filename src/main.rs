@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
         log_file: config.log_file.clone().into(),
     };
 
-    upload_job_worker::spawn(state.clone());
+    upload_job_worker::spawn(state.clone(), config.upload_worker_concurrency).await;
 
     let watcher = FolderWatcher::new(config.watch_folders.clone(), compressor.clone());
     std::thread::spawn(move || {

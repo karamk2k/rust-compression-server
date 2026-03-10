@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -17,21 +17,28 @@ use uuid::Uuid;
 use crate::app_state::AppState;
 use crate::auth::authenticated_user_id;
 use crate::db;
+use crate::models::file_model::FileRecord;
 use crate::models::folder_model::NewFolderRecord;
 use crate::models::upload_job_model::{NewUploadJobRecord, UploadJobStatus};
+use crate::services::auth_service::AuthService;
 use crate::services::file_service::FileService;
 use crate::services::r2_storage_service::R2StorageService;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/api/me", get(get_me))
         .route("/api/upload", post(upload_file))
         .route("/api/jobs/:id", get(get_upload_job))
         .route("/api/folders", get(list_folders).post(create_folder))
+        .route("/api/folders/tree", get(list_folders_tree))
         .route("/api/folders/:id", patch(update_folder).delete(delete_folder))
         .route("/api/folders/path", get(get_folder_path))
         .route("/api/files", get(list_files))
         .route("/api/files/summary", get(get_file_summary))
+        .route("/api/files/move-batch", patch(move_files_batch))
+        .route("/api/files/delete-batch", post(delete_files_batch))
         .route("/api/files/:id/move", patch(move_file_to_folder))
+        .route("/api/files/:id/thumb", get(file_thumbnail))
         .route("/api/files/:id/view", get(view_file))
         .route("/api/files/:id/download", get(download_file))
         .route("/api/files/:id", delete(delete_file))
@@ -42,6 +49,8 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 struct FilesQuery {
     folder_id: Option<i64>,
+    cursor: Option<i64>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,11 +81,52 @@ struct MoveFileRequest {
     folder_id: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MoveFilesBatchRequest {
+    ids: Vec<i64>,
+    folder_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteFilesBatchRequest {
+    ids: Vec<i64>,
+}
+
 #[derive(Debug, Serialize)]
 struct FileSummaryResponse {
     total_files: i64,
     total_original_size: i64,
     total_stored_size: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct CurrentUserResponse {
+    id: i64,
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PaginatedFilesResponse {
+    items: Vec<FileRecord>,
+    next_cursor: Option<i64>,
+    has_more: bool,
+}
+
+async fn get_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user_id(&state, &headers).await {
+        Some(user_id) => user_id,
+        None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
+    };
+
+    let auth_service = AuthService::new(state.db.clone());
+    match auth_service.username_by_id(user_id).await {
+        Ok(Some(username)) => Json(CurrentUserResponse { id: user_id, username }).into_response(),
+        Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "user not found" })),
+        Err(error) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": format!("failed to load current user: {}", error) }),
+        ),
+    }
 }
 
 async fn upload_file(
@@ -310,6 +360,23 @@ async fn list_folders(
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": format!("failed to query folders: {}", error) }),
+        ),
+    }
+}
+
+async fn list_folders_tree(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user_id(&state, &headers).await {
+        Some(user_id) => user_id,
+        None => {
+            return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+        }
+    };
+
+    match db::list_all_folders_with_counts_for_user(&state.db, user_id).await {
+        Ok(folders) => Json(folders).into_response(),
+        Err(error) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": format!("failed to query folder tree: {}", error) }),
         ),
     }
 }
@@ -673,6 +740,41 @@ async fn list_files(
         }
     }
 
+    if query.limit.is_some() || query.cursor.is_some() {
+        let limit = query.limit.unwrap_or(60).clamp(1, 200) as i64;
+        let files = match db::list_files_for_user_and_folder_page(
+            &state.db,
+            user_id,
+            query.folder_id,
+            query.cursor,
+            limit + 1,
+        )
+        .await
+        {
+            Ok(files) => files,
+            Err(error) => {
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("failed to query files: {}", error) }),
+                );
+            }
+        };
+
+        let has_more = files.len() as i64 > limit;
+        let mut items = files;
+        if has_more {
+            items.pop();
+        }
+        let next_cursor = items.last().map(|file| file.id);
+
+        return Json(PaginatedFilesResponse {
+            items,
+            next_cursor,
+            has_more,
+        })
+        .into_response();
+    }
+
     let file_service = FileService::new(
         state.db.clone(),
         state.compressor.clone(),
@@ -772,6 +874,151 @@ async fn move_file_to_folder(
             json!({ "error": format!("failed to move file: {}", error) }),
         ),
     }
+}
+
+async fn move_files_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MoveFilesBatchRequest>,
+) -> Response {
+    let user_id = match authenticated_user_id(&state, &headers).await {
+        Some(user_id) => user_id,
+        None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
+    };
+
+    let ids = normalize_ids(&payload.ids);
+    if ids.is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "ids must not be empty" }));
+    }
+    if ids.len() > 500 {
+        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "too many ids (max 500)" }));
+    }
+
+    if let Some(folder_id) = payload.folder_id {
+        match db::folder_exists_for_user(&state.db, folder_id, user_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": "invalid target folder" }),
+                );
+            }
+            Err(error) => {
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("failed to validate target folder: {}", error) }),
+                );
+            }
+        }
+    }
+
+    let mut moved_ids = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for file_id in ids {
+        let file = match db::get_file_by_id(&state.db, file_id).await {
+            Ok(Some(file)) if file.uploaded_by == user_id => file,
+            Ok(Some(_)) | Ok(None) => {
+                failed.push(json!({ "id": file_id, "error": "file not found" }));
+                continue;
+            }
+            Err(error) => {
+                failed.push(json!({ "id": file_id, "error": format!("failed to load file: {}", error) }));
+                continue;
+            }
+        };
+
+        if file.folder_id == payload.folder_id {
+            moved_ids.push(file_id);
+            continue;
+        }
+
+        match db::move_file_to_folder_for_user(&state.db, file_id, user_id, payload.folder_id).await {
+            Ok(true) => moved_ids.push(file_id),
+            Ok(false) => failed.push(json!({ "id": file_id, "error": "file not found" })),
+            Err(error) => {
+                failed.push(json!({ "id": file_id, "error": format!("failed to move file: {}", error) }));
+            }
+        }
+    }
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "moved_ids": moved_ids,
+            "failed": failed
+        }),
+    )
+}
+
+async fn delete_files_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DeleteFilesBatchRequest>,
+) -> Response {
+    let user_id = match authenticated_user_id(&state, &headers).await {
+        Some(user_id) => user_id,
+        None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
+    };
+
+    let ids = normalize_ids(&payload.ids);
+    if ids.is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "ids must not be empty" }));
+    }
+    if ids.len() > 500 {
+        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "too many ids (max 500)" }));
+    }
+
+    let file_service = FileService::new(
+        state.db.clone(),
+        state.compressor.clone(),
+        state.media_transcoder.clone(),
+        state.storage_backend.clone(),
+        state.r2_storage.clone(),
+        state.upload_dir.clone(),
+    );
+
+    let mut deleted_ids = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for file_id in ids {
+        match file_service.delete_file_by_id(file_id, user_id).await {
+            Ok(true) => deleted_ids.push(file_id),
+            Ok(false) => failed.push(json!({ "id": file_id, "error": "file not found" })),
+            Err(error) => failed.push(json!({ "id": file_id, "error": format!("delete failed: {}", error) })),
+        }
+    }
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "deleted_ids": deleted_ids,
+            "failed": failed
+        }),
+    )
+}
+
+async fn file_thumbnail(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user_id(&state, &headers).await {
+        Some(user_id) => user_id,
+        None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
+    };
+
+    let file = match db::get_file_by_id(&state.db, id).await {
+        Ok(Some(file)) if file.uploaded_by == user_id => file,
+        Ok(Some(_)) | Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
+        Err(error) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("failed to load file: {}", error) }),
+            );
+        }
+    };
+
+    if is_image_name(&file.original_name) {
+        return Redirect::to(&format!("/api/files/{}/view", id)).into_response();
+    }
+    json_response(StatusCode::NOT_FOUND, json!({ "error": "thumbnail not available for this file type" }))
 }
 
 async fn view_file(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -990,6 +1237,22 @@ fn parse_optional_i64(raw: &str) -> Result<Option<i64>, &'static str> {
         Ok(value) if value > 0 => Ok(Some(value)),
         _ => Err("folder_id must be a positive integer"),
     }
+}
+
+fn normalize_ids(ids: &[i64]) -> Vec<i64> {
+    let mut list: Vec<i64> = ids.iter().copied().filter(|id| *id > 0).collect();
+    list.sort_unstable();
+    list.dedup();
+    list
+}
+
+fn is_image_name(file_name: &str) -> bool {
+    let ext = file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg")
 }
 
 fn json_response(status: StatusCode, value: serde_json::Value) -> Response {

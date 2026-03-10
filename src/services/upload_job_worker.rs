@@ -9,38 +9,55 @@ use crate::app_state::AppState;
 use crate::db;
 use crate::services::file_service::FileService;
 
-pub fn spawn(state: AppState) {
-    tokio::spawn(async move {
-        if let Err(error) = run(state).await {
-            error!(?error, "upload job worker stopped");
-        }
-    });
-}
+pub async fn spawn(state: AppState, worker_count: usize) {
+    let worker_count = worker_count.max(1);
 
-async fn run(state: AppState) -> Result<()> {
-    let reset_count = db::reset_processing_upload_jobs(&state.db).await?;
-    if reset_count > 0 {
-        info!(count = reset_count, "re-queued stale processing upload jobs");
+    match db::reset_processing_upload_jobs(&state.db).await {
+        Ok(reset_count) if reset_count > 0 => {
+            info!(count = reset_count, "re-queued stale processing upload jobs");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            error!(?error, "failed to re-queue stale processing upload jobs");
+        }
     }
 
+    info!(workers = worker_count, "starting upload job workers");
+
+    for worker_id in 0..worker_count {
+        let worker_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = run(worker_state, worker_id).await {
+                error!(worker_id, ?error, "upload job worker stopped");
+            }
+        });
+    }
+}
+
+async fn run(state: AppState, worker_id: usize) -> Result<()> {
     loop {
-        match process_one(&state).await {
+        match process_one(&state, worker_id).await {
             Ok(true) => continue,
-            Ok(false) => sleep(Duration::from_secs(1)).await,
+            Ok(false) => sleep(Duration::from_millis(250)).await,
             Err(error) => {
-                error!(?error, "upload job worker iteration failed");
+                error!(worker_id, ?error, "upload job worker iteration failed");
                 sleep(Duration::from_secs(3)).await;
             }
         }
     }
 }
 
-async fn process_one(state: &AppState) -> Result<bool> {
+async fn process_one(state: &AppState, worker_id: usize) -> Result<bool> {
     let Some(job) = db::claim_next_pending_upload_job(&state.db).await? else {
         return Ok(false);
     };
 
-    info!(job_id = job.id, file = %job.original_name, "processing upload job");
+    info!(
+        worker_id,
+        job_id = job.id,
+        file = %job.original_name,
+        "processing upload job"
+    );
 
     let file_service = FileService::new(
         state.db.clone(),
@@ -64,6 +81,7 @@ async fn process_one(state: &AppState) -> Result<bool> {
         Ok(upload_result) => {
             db::mark_upload_job_done(&state.db, job.id, upload_result.id).await?;
             info!(
+                worker_id,
                 job_id = job.id,
                 file_id = upload_result.id,
                 file = %job.original_name,
@@ -74,7 +92,13 @@ async fn process_one(state: &AppState) -> Result<bool> {
             let message = format!("{:#}", error);
             let _ = tokio::fs::remove_file(&job.temp_path).await;
             db::mark_upload_job_failed(&state.db, job.id, &message).await?;
-            error!(job_id = job.id, file = %job.original_name, error = %message, "upload job failed");
+            error!(
+                worker_id,
+                job_id = job.id,
+                file = %job.original_name,
+                error = %message,
+                "upload job failed"
+            );
         }
     }
 

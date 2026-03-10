@@ -3,6 +3,7 @@ use axum::{routing::get, Router};
 use crate::app_state::AppState;
 use crate::routes;
 use tokio::net::TcpListener;
+use tower_http::services::ServeDir;
 use tracing::info;
 
 pub struct Server {
@@ -21,6 +22,7 @@ impl Server {
     pub async fn run(self) {
         let app = Router::new()
             .route("/", get(|| async { "Rust Compression Server 🚀" }))
+            .nest_service("/assets", ServeDir::new("web/assets"))
             .merge(routes::router())
             .with_state(self.state);
 

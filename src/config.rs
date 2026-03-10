@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub server_host: String,
     pub server_port: u16,
     pub compression_level: i32,
+    pub upload_worker_concurrency: usize,
     pub enable_media_transcode: bool,
     pub ffmpeg_bin: String,
     pub ffmpeg_video_crf: u8,
@@ -46,6 +47,11 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(22);
+        let upload_worker_concurrency = env::var("UPLOAD_WORKER_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or_else(default_upload_worker_concurrency);
         let enable_media_transcode = parse_bool_env(env::var("ENABLE_MEDIA_TRANSCODE").ok(), false);
         let ffmpeg_bin = env::var("FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".to_string());
         let ffmpeg_video_crf = env::var("FFMPEG_VIDEO_CRF")
@@ -86,6 +92,7 @@ impl AppConfig {
             server_host,
             server_port,
             compression_level,
+            upload_worker_concurrency,
             enable_media_transcode,
             ffmpeg_bin,
             ffmpeg_video_crf,
@@ -151,4 +158,10 @@ fn parse_watch_folders(raw: Option<String>) -> HashMap<String, String> {
     }
 
     folders
+}
+
+fn default_upload_worker_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
 }
