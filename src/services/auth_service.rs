@@ -43,4 +43,9 @@ impl AuthService {
         let username = db::username_by_id(&self.db, user_id).await?;
         Ok(username)
     }
+
+    pub async fn user_id_by_username(&self, username: &str) -> Result<Option<i64>> {
+        let user_id = db::user_id_by_username(&self.db, username).await?;
+        Ok(user_id)
+    }
 }

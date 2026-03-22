@@ -16,18 +16,32 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 }
 
 pub async fn ensure_admin_user(pool: &SqlitePool, username: &str, password: &str) -> Result<()> {
-    let existing = sqlx::query_as::<_, (i64,)>("SELECT COUNT(1) FROM users WHERE username = ?1")
+    let existing = sqlx::query_as::<_, LoginUser>(
+        "SELECT id, password_hash FROM users WHERE username = ?1 LIMIT 1",
+    )
         .bind(username)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?;
 
-    if existing.0 == 0 {
-        let password_hash = hash_password(password)?;
-        sqlx::query("INSERT INTO users (username, password_hash) VALUES (?1, ?2)")
-            .bind(username)
-            .bind(password_hash)
-            .execute(pool)
-            .await?;
+    match existing {
+        Some(user) => {
+            if !verify_password(&user.password_hash, password) {
+                let password_hash = hash_password(password)?;
+                sqlx::query("UPDATE users SET password_hash = ?1 WHERE id = ?2")
+                    .bind(password_hash)
+                    .bind(user.id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        None => {
+            let password_hash = hash_password(password)?;
+            sqlx::query("INSERT INTO users (username, password_hash) VALUES (?1, ?2)")
+                .bind(username)
+                .bind(password_hash)
+                .execute(pool)
+                .await?;
+        }
     }
 
     Ok(())
@@ -98,6 +112,16 @@ pub async fn user_id_from_session(
 pub async fn username_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?1 LIMIT 1")
         .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn user_id_by_username(
+    pool: &SqlitePool,
+    username: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = ?1 LIMIT 1")
+        .bind(username)
         .fetch_optional(pool)
         .await
 }

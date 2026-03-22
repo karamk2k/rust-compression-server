@@ -13,7 +13,7 @@ mod services;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use app_state::AppState;
 use config::{AppConfig, StorageBackend};
 use db::run_migrations;
@@ -70,6 +70,15 @@ async fn main() -> Result<()> {
     auth_service
         .ensure_admin_user(&config.admin_username, &config.admin_password)
         .await?;
+    let api_token_user_id = match &config.api_token {
+        Some(_) => Some(
+            auth_service
+                .user_id_by_username(&config.admin_username)
+                .await?
+                .ok_or_else(|| anyhow!("admin user missing after initialization"))?,
+        ),
+        None => None,
+    };
 
     let state = AppState {
         db: pool,
@@ -79,6 +88,8 @@ async fn main() -> Result<()> {
         r2_storage,
         upload_dir: config.upload_dir.clone().into(),
         log_file: config.log_file.clone().into(),
+        api_token: config.api_token.clone(),
+        api_token_user_id,
     };
 
     upload_job_worker::spawn(state.clone(), config.upload_worker_concurrency).await;

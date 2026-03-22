@@ -31,6 +31,7 @@ pub struct AppConfig {
     pub log_level: String,
     pub admin_username: String,
     pub admin_password: String,
+    pub api_token: Option<String>,
     pub watch_folders: HashMap<String, String>,
 }
 
@@ -86,6 +87,10 @@ impl AppConfig {
         let admin_username = env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
         let admin_password =
             env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
+        let api_token = env::var("API_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         let watch_folders = parse_watch_folders(env::var("WATCH_FOLDERS").ok());
 
         Self {
@@ -112,6 +117,7 @@ impl AppConfig {
             log_level,
             admin_username,
             admin_password,
+            api_token,
             watch_folders,
         }
     }
