@@ -32,6 +32,12 @@ const confirmModalMessage = ref('')
 const confirmModalActionLabel = ref('Confirm')
 const confirmModalDanger = ref(false)
 let confirmModalAction: (() => Promise<boolean | void>) | null = null
+const shareModalOpen = ref(false)
+const shareFile = ref<FileItem | null>(null)
+const shareExpiresHours = ref(24)
+const shareLink = ref('')
+const shareError = ref('')
+const shareLinkInput = ref<HTMLInputElement | null>(null)
 const uploadDragDepth = ref(0)
 const uploadDragActive = ref(false)
 
@@ -388,9 +394,55 @@ function openDeleteFolderModal() {
   )
 }
 
+function openShareModal(file: FileItem) {
+  shareFile.value = file
+  shareExpiresHours.value = 24
+  shareLink.value = ''
+  shareError.value = ''
+  shareModalOpen.value = true
+}
+
+function closeShareModal() {
+  if (store.sharingFileId !== null) return
+  shareModalOpen.value = false
+}
+
+async function submitShareModal() {
+  if (!shareFile.value) return
+  const hours = Number(shareExpiresHours.value)
+  if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
+    shareError.value = 'Expiration must be between 1 hour and 30 days.'
+    return
+  }
+
+  shareError.value = ''
+  const share = await store.createShareForFile(shareFile.value.id, Math.trunc(hours))
+  if (!share) return
+  shareLink.value = share.url
+  void nextTick(() => {
+    shareLinkInput.value?.focus()
+    shareLinkInput.value?.select()
+  })
+}
+
+async function copyShareLink() {
+  if (!shareLink.value) return
+  try {
+    await navigator.clipboard.writeText(shareLink.value)
+    store.showToast('ok', 'Share link copied')
+  } catch {
+    shareLinkInput.value?.focus()
+    shareLinkInput.value?.select()
+  }
+}
+
 function onGlobalKeyDown(event: KeyboardEvent) {
-  if ((folderModalOpen.value || renameModalOpen.value || moveModalOpen.value || confirmModalOpen.value) && event.key === 'Escape') {
+  if ((folderModalOpen.value || renameModalOpen.value || moveModalOpen.value || confirmModalOpen.value || shareModalOpen.value) && event.key === 'Escape') {
     event.preventDefault()
+    if (shareModalOpen.value) {
+      closeShareModal()
+      return
+    }
     if (confirmModalOpen.value) {
       closeConfirmModal()
       return
@@ -628,6 +680,9 @@ onBeforeUnmount(() => {
               <div class="row-actions" @click.stop>
                 <button class="ghost" @click="store.setActiveFile(file.id)">Preview</button>
                 <button class="ghost" @click="store.openLightbox(file.id)">Viewer</button>
+                <button class="ghost" @click="openShareModal(file)" :disabled="store.sharingFileId === file.id">
+                  {{ store.sharingFileId === file.id ? 'Sharing...' : 'Share' }}
+                </button>
                 <a class="ghost-link" :href="store.fileDownloadUrl(file)">Download</a>
               </div>
             </div>
@@ -669,6 +724,7 @@ onBeforeUnmount(() => {
             <p>Stored: {{ formatBytes(store.activeFile.compressed_size) }}</p>
             <p>Ratio: {{ compressionRatio(store.activeFile) }}</p>
             <p>Date: {{ store.activeFile.created_at }}</p>
+            <button class="ghost" @click="openShareModal(store.activeFile)">Share</button>
             <a class="ghost-link" :href="store.fileDownloadUrl(store.activeFile)">Download</a>
           </div>
         </template>
@@ -779,6 +835,47 @@ onBeforeUnmount(() => {
             :disabled="store.busyAction"
           >
             {{ confirmModalActionLabel }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="shareModalOpen" class="dialog-backdrop" @click.self="closeShareModal">
+      <div class="dialog card">
+        <h3>Share File</h3>
+        <p v-if="shareFile" class="confirm-message">{{ shareFile.original_name }}</p>
+        <label class="field-label" for="share-expiry-hours">Expires in hours</label>
+        <input
+          id="share-expiry-hours"
+          v-model.number="shareExpiresHours"
+          class="dialog-input"
+          type="number"
+          min="1"
+          max="720"
+          step="1"
+          :disabled="store.sharingFileId !== null"
+          @keydown.enter.prevent="submitShareModal"
+        />
+        <p class="field-hint">1 to 720 hours.</p>
+        <p v-if="shareError" class="field-error">{{ shareError }}</p>
+
+        <template v-if="shareLink">
+          <label class="field-label" for="share-link">Share link</label>
+          <input
+            id="share-link"
+            ref="shareLinkInput"
+            class="dialog-input"
+            type="text"
+            readonly
+            :value="shareLink"
+          />
+        </template>
+
+        <div class="dialog-actions">
+          <button class="ghost" @click="closeShareModal" :disabled="store.sharingFileId !== null">Close</button>
+          <button v-if="shareLink" class="ghost" @click="copyShareLink">Copy</button>
+          <button class="primary" @click="submitShareModal" :disabled="store.sharingFileId !== null">
+            {{ shareLink ? 'Create New' : store.sharingFileId !== null ? 'Creating...' : 'Create Link' }}
           </button>
         </div>
       </div>

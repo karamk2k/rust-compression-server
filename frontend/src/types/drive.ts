@@ -39,6 +39,15 @@ export interface FileSummary {
   total_stored_size: number
 }
 
+export interface FileShare {
+  id: number
+  uuid: string
+  file_id: number
+  expires_at: string
+  created_at: string
+  url: string
+}
+
 export interface PaginatedFilesResponse {
   items: FileItem[]
   next_cursor: number | null

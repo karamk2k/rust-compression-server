@@ -1,11 +1,13 @@
 mod app_state;
 mod auth;
 mod config;
+mod controllers;
 mod db;
 mod file_compressor;
 mod folder_watcher;
 mod logging;
 mod models;
+mod repositories;
 mod routes;
 mod server;
 mod services;

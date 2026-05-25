@@ -16,17 +16,17 @@ use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::auth::authenticated_user_id;
+use crate::controllers::{auth_controller, shares_controller};
 use crate::db;
 use crate::models::file_model::FileRecord;
 use crate::models::folder_model::NewFolderRecord;
 use crate::models::upload_job_model::{NewUploadJobRecord, UploadJobStatus};
-use crate::services::auth_service::AuthService;
 use crate::services::file_service::FileService;
 use crate::services::r2_storage_service::R2StorageService;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/me", get(get_me))
+        .route("/api/me", get(auth_controller::get_me))
         .route("/api/upload", post(upload_file))
         .route("/api/jobs/:id", get(get_upload_job))
         .route("/api/folders", get(list_folders).post(create_folder))
@@ -38,10 +38,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/files/move-batch", patch(move_files_batch))
         .route("/api/files/delete-batch", post(delete_files_batch))
         .route("/api/files/:id/move", patch(move_file_to_folder))
+        .route("/api/files/:id/share", post(shares_controller::create_file_share))
         .route("/api/files/:id/thumb", get(file_thumbnail))
         .route("/api/files/:id/view", get(view_file))
         .route("/api/files/:id/download", get(download_file))
         .route("/api/files/:id", delete(delete_file))
+        .route("/api/shares/:uuid", get(shares_controller::get_file_share))
+        .route("/share/:uuid", get(shares_controller::view_shared_file))
         // Allow large multipart uploads (up to 10 GB).
         .layer(DefaultBodyLimit::max(10usize * 1024 * 1024 * 1024))
 }
@@ -100,33 +103,10 @@ struct FileSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct CurrentUserResponse {
-    id: i64,
-    username: String,
-}
-
-#[derive(Debug, Serialize)]
 struct PaginatedFilesResponse {
     items: Vec<FileRecord>,
     next_cursor: Option<i64>,
     has_more: bool,
-}
-
-async fn get_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let user_id = match authenticated_user_id(&state, &headers).await {
-        Some(user_id) => user_id,
-        None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
-    };
-
-    let auth_service = AuthService::new(state.db.clone());
-    match auth_service.username_by_id(user_id).await {
-        Ok(Some(username)) => Json(CurrentUserResponse { id: user_id, username }).into_response(),
-        Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "user not found" })),
-        Err(error) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": format!("failed to load current user: {}", error) }),
-        ),
-    }
 }
 
 async fn upload_file(

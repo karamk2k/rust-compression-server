@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   clearLogs,
+  createFileShare,
   createFolder,
   deleteFilesBatch,
   deleteFolder,
@@ -24,6 +25,7 @@ import {
 import type {
   FileItem,
   FileKind,
+  FileShare,
   FileSummary,
   FolderItem,
   FolderPathItem,
@@ -60,6 +62,7 @@ export const useDriveStore = defineStore('drive', () => {
   const loadingFiles = ref(false)
   const loadingMore = ref(false)
   const busyAction = ref(false)
+  const sharingFileId = ref<number | null>(null)
 
   const selectedIds = ref<number[]>([])
   const activeFileId = ref<number | null>(null)
@@ -388,6 +391,23 @@ export const useDriveStore = defineStore('drive', () => {
     }
   }
 
+  async function createShareForFile(fileId: number, expiresInHours: number): Promise<FileShare | null> {
+    sharingFileId.value = fileId
+    try {
+      const share = await createFileShare(fileId, expiresInHours)
+      showToast('ok', 'Share link created')
+      return {
+        ...share,
+        url: new URL(share.url, window.location.origin).toString(),
+      }
+    } catch (error) {
+      showToast('error', formatError(error))
+      return null
+    } finally {
+      sharingFileId.value = null
+    }
+  }
+
   async function createFolderWithName(name: string) {
     busyAction.value = true
     try {
@@ -583,6 +603,7 @@ export const useDriveStore = defineStore('drive', () => {
     loadingFiles,
     loadingMore,
     busyAction,
+    sharingFileId,
 
     selectedIds,
     selectedFiles,
@@ -626,6 +647,7 @@ export const useDriveStore = defineStore('drive', () => {
 
     moveSelectedTo,
     deleteSelectedIds,
+    createShareForFile,
 
     createFolderWithName,
     renameCurrentFolderWithName,

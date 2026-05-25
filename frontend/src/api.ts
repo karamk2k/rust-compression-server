@@ -1,5 +1,6 @@
 import type {
   FileSummary,
+  FileShare,
   FolderItem,
   FolderPathItem,
   MeResponse,
@@ -74,6 +75,14 @@ export async function deleteFilesBatch(ids: number[]) {
       body: JSON.stringify({ ids }),
     },
   )
+}
+
+export async function createFileShare(fileId: number, expiresInHours: number) {
+  return request<FileShare>(`/api/files/${fileId}/share`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ expires_in_hours: expiresInHours }),
+  })
 }
 
 export async function createFolder(name: string, parentId: number | null) {
