@@ -7,6 +7,7 @@ mod file_compressor;
 mod folder_watcher;
 mod logging;
 mod models;
+mod pages;
 mod repositories;
 mod routes;
 mod server;

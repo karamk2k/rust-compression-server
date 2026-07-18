@@ -1,6 +1,7 @@
 use axum::serve;
 use axum::{routing::get, Router};
 use crate::app_state::AppState;
+use crate::pages::share_not_found_page;
 use crate::routes;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
@@ -24,6 +25,7 @@ impl Server {
             .route("/", get(|| async { "Rust Compression Server 🚀" }))
             .nest_service("/assets", ServeDir::new("web/assets"))
             .merge(routes::router())
+            .fallback(|| async { share_not_found_page() })
             .with_state(self.state);
 
         let listener = TcpListener::bind(&self.bind_target).await.unwrap();

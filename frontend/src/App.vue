@@ -653,12 +653,15 @@ onBeforeUnmount(() => {
                 :alt="file.original_name"
                 loading="lazy"
               />
-              <video
+              <div
                 v-else-if="store.fileKind(file) === 'video'"
-                :src="store.fileViewUrl(file)"
-                muted
-                preload="metadata"
-              />
+                class="video-placeholder"
+                role="img"
+                :aria-label="`Video: ${file.original_name}`"
+              >
+                <span class="video-play-icon" aria-hidden="true">&#9654;</span>
+                <span>VIDEO</span>
+              </div>
               <div v-else class="fallback">{{ store.fileKind(file).toUpperCase() }}</div>
             </div>
 
@@ -711,9 +714,11 @@ onBeforeUnmount(() => {
             />
             <video
               v-else-if="store.fileKind(store.activeFile) === 'video'"
+              :key="store.activeFile.id"
               :src="store.fileViewUrl(store.activeFile)"
               controls
               preload="metadata"
+              playsinline
             />
             <div v-else class="fallback large">{{ store.fileKind(store.activeFile).toUpperCase() }}</div>
           </div>
@@ -891,9 +896,12 @@ onBeforeUnmount(() => {
         />
         <video
           v-else
+          :key="store.lightboxFile.id"
           :src="store.fileViewUrl(store.lightboxFile)"
           controls
           autoplay
+          playsinline
+          preload="metadata"
         />
         <div class="caption">{{ store.lightboxFile.original_name }}</div>
       </div>
