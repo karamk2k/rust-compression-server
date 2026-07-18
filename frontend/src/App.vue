@@ -221,6 +221,13 @@ function onCardClick(file: FileItem, event: MouseEvent) {
   }
 }
 
+function onThumbnailError(event: Event) {
+  const image = event.currentTarget as HTMLImageElement
+  image.onerror = null
+  image.classList.add('thumbnail-missing')
+  image.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw='
+}
+
 async function onMoveSelected() {
   const raw = moveTarget.value.trim()
   if (raw === '') {
@@ -653,15 +660,14 @@ onBeforeUnmount(() => {
                 :alt="file.original_name"
                 loading="lazy"
               />
-              <div
+              <img
                 v-else-if="store.fileKind(file) === 'video'"
-                class="video-placeholder"
-                role="img"
-                :aria-label="`Video: ${file.original_name}`"
-              >
-                <span class="video-play-icon" aria-hidden="true">&#9654;</span>
-                <span>VIDEO</span>
-              </div>
+                :src="store.fileThumbUrl(file)"
+                :alt="`Video thumbnail: ${file.original_name}`"
+                loading="lazy"
+                decoding="async"
+                @error="onThumbnailError"
+              />
               <div v-else class="fallback">{{ store.fileKind(file).toUpperCase() }}</div>
             </div>
 

@@ -43,7 +43,7 @@ export async function getFolderPath(folderId: number | null) {
   return request<FolderPathItem[]>(`/api/folders/path?folder_id=${folderId}`)
 }
 
-export async function listFiles(folderId: number | null, cursor: number | null, limit = 60) {
+export async function listFiles(folderId: number | null, cursor: number | null, limit = 30) {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   if (folderId !== null) params.set('folder_id', String(folderId))

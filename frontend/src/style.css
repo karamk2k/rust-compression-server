@@ -354,36 +354,9 @@ button,
   object-fit: cover;
 }
 
-.video-placeholder {
-  width: 100%;
-  min-height: 170px;
-  height: 100%;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 10px;
+.thumbnail-missing {
   background: linear-gradient(145deg, #172033, #0f172a);
-  color: #dbeafe;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-}
-
-.file-list .video-placeholder {
-  min-height: 120px;
-}
-
-.video-play-icon {
-  width: 52px;
-  height: 52px;
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  padding-left: 3px;
-  color: #fff;
-  font-size: 22px;
-  background: rgba(255, 255, 255, 0.12);
+  color: transparent;
 }
 
 .fallback {

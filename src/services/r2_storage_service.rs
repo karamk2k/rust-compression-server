@@ -171,6 +171,26 @@ impl R2StorageService {
         Ok(bytes)
     }
 
+    pub async fn download_to_path(&self, db_path: &str, destination: &Path) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let key = self.key_from_db_path(db_path)?;
+        let output = self.client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .with_context(|| format!("failed to read object key={key}"))?;
+        let mut reader = output.body.into_async_read();
+        let mut file = tokio::fs::File::create(destination)
+            .await
+            .with_context(|| format!("failed to create {}", destination.display()))?;
+        tokio::io::copy(&mut reader, &mut file).await?;
+        file.flush().await?;
+        Ok(())
+    }
+
     pub async fn get_object_stream(
         &self,
         db_path: &str,

@@ -721,7 +721,7 @@ async fn list_files(
     }
 
     if query.limit.is_some() || query.cursor.is_some() {
-        let limit = query.limit.unwrap_or(60).clamp(1, 200) as i64;
+        let limit = query.limit.unwrap_or(30).clamp(1, 200) as i64;
         let files = match db::list_files_for_user_and_folder_page(
             &state.db,
             user_id,
@@ -997,6 +997,44 @@ async fn file_thumbnail(Path(id): Path<i64>, State(state): State<AppState>, head
 
     if is_image_name(&file.original_name) {
         return Redirect::to(&format!("/api/files/{}/view", id)).into_response();
+    }
+    if let Some(thumbnail_path) = file.thumbnail_path.as_deref() {
+        let result = if R2StorageService::is_r2_path(thumbnail_path) {
+            stream_r2_object_response(
+                &state,
+                thumbnail_path,
+                "thumbnail.jpg",
+                "image/jpeg",
+                false,
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())
+        } else {
+            stream_uncompressed_file_response(
+                thumbnail_path,
+                "thumbnail.jpg",
+                "image/jpeg",
+                false,
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())
+        };
+
+        return match result {
+            Ok(mut response) => {
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, max-age=86400"),
+                );
+                response
+            }
+            Err(error) => json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("thumbnail failed: {}", error) }),
+            ),
+        };
     }
     json_response(StatusCode::NOT_FOUND, json!({ "error": "thumbnail not available for this file type" }))
 }

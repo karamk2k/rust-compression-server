@@ -128,13 +128,14 @@ pub async fn user_id_by_username(
 
 pub async fn insert_file(pool: &SqlitePool, record: &NewFileRecord<'_>) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
-        "INSERT INTO files (original_name, folder_id, stored_path, compressed_path, is_compressed, original_size, compressed_size, uploaded_by) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO files (original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )
     .bind(record.original_name)
     .bind(record.folder_id)
     .bind(record.stored_path)
     .bind(record.compressed_path)
+    .bind(record.thumbnail_path)
     .bind(record.is_compressed)
     .bind(record.original_size)
     .bind(record.compressed_size)
@@ -151,7 +152,7 @@ pub async fn list_files_for_user_and_folder(
     folder_id: Option<i64>,
 ) -> Result<Vec<FileRecord>, sqlx::Error> {
     sqlx::query_as::<_, FileRecord>(
-        "SELECT id, original_name, folder_id, stored_path, compressed_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
+        "SELECT id, original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
          FROM files \
          WHERE uploaded_by = ?1 \
            AND ((?2 IS NULL AND folder_id IS NULL) OR folder_id = ?2) \
@@ -171,7 +172,7 @@ pub async fn list_files_for_user_and_folder_page(
     limit: i64,
 ) -> Result<Vec<FileRecord>, sqlx::Error> {
     sqlx::query_as::<_, FileRecord>(
-        "SELECT id, original_name, folder_id, stored_path, compressed_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
+        "SELECT id, original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
          FROM files \
          WHERE uploaded_by = ?1 \
            AND ((?2 IS NULL AND folder_id IS NULL) OR folder_id = ?2) \
@@ -201,12 +202,45 @@ pub async fn summarize_files_for_user(
 
 pub async fn get_file_by_id(pool: &SqlitePool, file_id: i64) -> Result<Option<FileRecord>, sqlx::Error> {
     sqlx::query_as::<_, FileRecord>(
-        "SELECT id, original_name, folder_id, stored_path, compressed_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
+        "SELECT id, original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
          FROM files WHERE id = ?1 LIMIT 1",
     )
     .bind(file_id)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn list_videos_missing_thumbnails(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<FileRecord>, sqlx::Error> {
+    sqlx::query_as::<_, FileRecord>(
+        "SELECT id, original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
+         FROM files \
+         WHERE thumbnail_path IS NULL \
+           AND (lower(original_name) LIKE '%.mp4' \
+             OR lower(original_name) LIKE '%.webm' \
+             OR lower(original_name) LIKE '%.mov' \
+             OR lower(original_name) LIKE '%.avi' \
+             OR lower(original_name) LIKE '%.mkv') \
+         ORDER BY id ASC LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn update_file_thumbnail_path(
+    pool: &SqlitePool,
+    file_id: i64,
+    thumbnail_path: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE files SET thumbnail_path = ?1 WHERE id = ?2")
+        .bind(thumbnail_path)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn delete_file_by_id_for_user(

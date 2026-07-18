@@ -24,6 +24,13 @@ pub async fn spawn(state: AppState, worker_count: usize) {
 
     info!(workers = worker_count, "starting upload job workers");
 
+    let backfill_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(error) = backfill_video_thumbnails(backfill_state).await {
+            error!(?error, "video thumbnail backfill stopped");
+        }
+    });
+
     for worker_id in 0..worker_count {
         let worker_state = state.clone();
         tokio::spawn(async move {
@@ -32,6 +39,33 @@ pub async fn spawn(state: AppState, worker_count: usize) {
             }
         });
     }
+}
+
+async fn backfill_video_thumbnails(state: AppState) -> Result<()> {
+    // One bounded, resumable pass per startup avoids competing indefinitely with uploads.
+    let files = db::list_videos_missing_thumbnails(&state.db, 500).await?;
+    if files.is_empty() {
+        return Ok(());
+    }
+    info!(count = files.len(), "starting video thumbnail backfill");
+    let file_service = FileService::new(
+        state.db.clone(),
+        state.compressor.clone(),
+        state.media_transcoder.clone(),
+        state.storage_backend.clone(),
+        state.r2_storage.clone(),
+        state.upload_dir.clone(),
+    );
+    let mut generated = 0usize;
+    for file in files {
+        match file_service.generate_missing_thumbnail(&file).await {
+            Ok(true) => generated += 1,
+            Ok(false) => {}
+            Err(error) => error!(file_id = file.id, ?error, "thumbnail backfill failed for file"),
+        }
+    }
+    info!(generated, "video thumbnail backfill completed");
+    Ok(())
 }
 
 async fn run(state: AppState, worker_id: usize) -> Result<()> {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use sqlx::SqlitePool;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::StorageBackend;
@@ -72,6 +72,21 @@ impl FileService {
             compressed_size = transcoded_size as i64;
         }
 
+        let thumbnail_filename = format!("{stored_filename}.thumb.jpg");
+        let thumbnail_path = self.upload_dir.join(&thumbnail_filename);
+        let mut thumbnail_path_str = match self
+            .media_transcoder
+            .generate_video_thumbnail(&stored_path, &thumbnail_path, &ext)
+            .await
+        {
+            Ok(true) => Some(thumbnail_path.to_string_lossy().to_string()),
+            Ok(false) => None,
+            Err(error) => {
+                warn!(file = %original_name, ?error, "video thumbnail generation skipped");
+                None
+            }
+        };
+
         if should_try_zstd(&ext) {
             let candidate_compressed_path = self.upload_dir.join(format!("{}.zst", stored_filename));
             let candidate_compressed_path_str = candidate_compressed_path.to_string_lossy().to_string();
@@ -135,6 +150,24 @@ impl FileService {
                 db_compressed_path = db_stored_path.clone();
             }
 
+
+            if let Some(local_thumbnail_path) = thumbnail_path_str.clone() {
+                let thumbnail_key = r2_storage.object_key_for_filename(&thumbnail_filename);
+                match r2_storage
+                    .upload_path(&thumbnail_key, Path::new(&local_thumbnail_path))
+                    .await
+                {
+                    Ok(()) => {
+                        thumbnail_path_str = Some(r2_storage.db_path_for_key(&thumbnail_key));
+                    }
+                    Err(error) => {
+                        warn!(file = %original_name, ?error, "failed to upload video thumbnail");
+                        thumbnail_path_str = None;
+                    }
+                }
+                let _ = tokio::fs::remove_file(&local_thumbnail_path).await;
+            }
+
             self.delete_by_path(&stored_path_str).await?;
             if compressed_path_str != stored_path_str {
                 self.delete_by_path(&compressed_path_str).await?;
@@ -148,6 +181,7 @@ impl FileService {
                 folder_id,
                 stored_path: &db_stored_path,
                 compressed_path: &db_compressed_path,
+                thumbnail_path: thumbnail_path_str.as_deref(),
                 is_compressed,
                 original_size,
                 compressed_size,
@@ -161,6 +195,7 @@ impl FileService {
             folder_id,
             stored_path: db_stored_path,
             compressed_path: db_compressed_path,
+            thumbnail_path: thumbnail_path_str,
             is_compressed,
             original_size,
             compressed_size,
@@ -179,6 +214,50 @@ impl FileService {
     pub async fn get_file_by_id(&self, file_id: i64) -> Result<Option<FileRecord>> {
         let file = db::get_file_by_id(&self.db, file_id).await?;
         Ok(file)
+    }
+
+    pub async fn generate_missing_thumbnail(&self, file: &FileRecord) -> Result<bool> {
+        if file.thumbnail_path.is_some() || file.is_compressed {
+            return Ok(false);
+        }
+
+        let ext = file_extension(&file.original_name);
+        let temporary_source = self.upload_dir.join(format!(".thumb-source-{}-{}", file.id, Uuid::new_v4()));
+        let source_path = if R2StorageService::is_r2_path(&file.stored_path) {
+            self.r2_required()?
+                .download_to_path(&file.stored_path, &temporary_source)
+                .await?;
+            temporary_source.as_path()
+        } else {
+            Path::new(&file.stored_path)
+        };
+
+        let thumbnail_filename = format!("file-{}.thumb.jpg", file.id);
+        let local_thumbnail = self.upload_dir.join(&thumbnail_filename);
+        let generated = self.media_transcoder
+            .generate_video_thumbnail(source_path, &local_thumbnail, &ext)
+            .await
+            .unwrap_or(false);
+
+        if R2StorageService::is_r2_path(&file.stored_path) {
+            let _ = tokio::fs::remove_file(&temporary_source).await;
+        }
+        if !generated {
+            return Ok(false);
+        }
+
+        let db_thumbnail_path = if self.storage_backend == StorageBackend::R2 {
+            let r2_storage = self.r2_required()?;
+            let key = r2_storage.object_key_for_filename(&thumbnail_filename);
+            r2_storage.upload_path(&key, &local_thumbnail).await?;
+            let _ = tokio::fs::remove_file(&local_thumbnail).await;
+            r2_storage.db_path_for_key(&key)
+        } else {
+            local_thumbnail.to_string_lossy().to_string()
+        };
+
+        db::update_file_thumbnail_path(&self.db, file.id, &db_thumbnail_path).await?;
+        Ok(true)
     }
 
     pub async fn view_file_bytes(&self, file_id: i64) -> Result<Option<(String, Vec<u8>)>> {
@@ -232,6 +311,11 @@ impl FileService {
         if file.compressed_path != file.stored_path {
             if let Err(e) = self.delete_by_path(&file.compressed_path).await {
                 error!(file = %file.compressed_path, ?e, "failed to delete compressed file after DB delete");
+            }
+        }
+        if let Some(thumbnail_path) = &file.thumbnail_path {
+            if let Err(e) = self.delete_by_path(thumbnail_path).await {
+                error!(file = %thumbnail_path, ?e, "failed to delete thumbnail after DB delete");
             }
         }
 

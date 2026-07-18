@@ -3,7 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
+use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
+
+static THUMBNAIL_JOBS: Semaphore = Semaphore::const_new(2);
 
 #[derive(Clone, Debug)]
 pub struct MediaTranscodeService {
@@ -16,6 +20,65 @@ pub struct MediaTranscodeService {
 }
 
 impl MediaTranscodeService {
+    pub async fn generate_video_thumbnail(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        ext: &str,
+    ) -> Result<bool> {
+        if !self.enabled || !is_video_extension(ext) {
+            return Ok(false);
+        }
+
+        let _permit = THUMBNAIL_JOBS.acquire().await?;
+        let args = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            "1",
+            "-i",
+            &input_path.to_string_lossy(),
+            "-frames:v",
+            "1",
+            "-vf",
+            "thumbnail,scale=480:-2",
+            "-q:v",
+            "5",
+            &output_path.to_string_lossy(),
+        ];
+
+        let command = Command::new(&self.ffmpeg_bin).args(args).output();
+        let output = match timeout(Duration::from_secs(30), command).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                warn!(file = %input_path.display(), ?error, "failed to start video thumbnail generation");
+                return Ok(false);
+            }
+            Err(_) => {
+                warn!(file = %input_path.display(), "video thumbnail generation timed out");
+                return Ok(false);
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = truncate_log_text(&output.stderr, 260);
+            warn!(file = %input_path.display(), %stderr, "video thumbnail generation failed");
+            let _ = tokio::fs::remove_file(output_path).await;
+            return Ok(false);
+        }
+
+        let valid = tokio::fs::metadata(output_path)
+            .await
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
+        if !valid {
+            let _ = tokio::fs::remove_file(output_path).await;
+        }
+        Ok(valid)
+    }
+
     pub fn new(
         enabled: bool,
         ffmpeg_bin: String,
@@ -203,6 +266,10 @@ fn build_ffmpeg_args(
 
 fn is_transcode_candidate(ext: &str) -> bool {
     matches!(ext, "mp4" | "mov" | "mkv" | "jpg" | "jpeg" | "png" | "webp")
+}
+
+fn is_video_extension(ext: &str) -> bool {
+    matches!(ext, "mp4" | "webm" | "mov" | "avi" | "mkv")
 }
 
 fn truncate_log_text(bytes: &[u8], max_len: usize) -> String {

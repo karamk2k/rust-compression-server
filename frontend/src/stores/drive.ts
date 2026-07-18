@@ -310,7 +310,7 @@ export const useDriveStore = defineStore('drive', () => {
     }
 
     try {
-      const response = await listFiles(currentFolderId.value, reset ? null : nextCursor.value, 60)
+      const response = await listFiles(currentFolderId.value, reset ? null : nextCursor.value, 30)
       if (reset) {
         files.value = response.items
       } else {
