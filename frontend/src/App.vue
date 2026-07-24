@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FolderTreeNode from './components/FolderTreeNode.vue'
 import { useDriveStore } from './stores/drive'
 import type { FileItem } from './types/drive'
@@ -40,6 +40,40 @@ const shareError = ref('')
 const shareLinkInput = ref<HTMLInputElement | null>(null)
 const uploadDragDepth = ref(0)
 const uploadDragActive = ref(false)
+const previewMediaError = ref(false)
+const previewMediaLoading = ref(false)
+const previewRetry = ref(0)
+
+const previewMediaUrl = computed(() => {
+  if (!store.activeFile) return ''
+  const url = store.fileViewUrl(store.activeFile)
+  return previewRetry.value ? `${url}?retry=${previewRetry.value}` : url
+})
+
+function onPreviewMediaLoad() {
+  previewMediaLoading.value = false
+  previewMediaError.value = false
+}
+
+function onPreviewMediaError() {
+  previewMediaLoading.value = false
+  previewMediaError.value = true
+}
+
+function retryPreview() {
+  previewMediaError.value = false
+  previewMediaLoading.value = true
+  previewRetry.value += 1
+}
+
+watch(
+  () => store.activeFile?.id,
+  () => {
+    previewMediaError.value = false
+    previewMediaLoading.value = Boolean(store.activeFile)
+    previewRetry.value = 0
+  },
+)
 
 const folderTree = computed<TreeFolder[]>(() => {
   const byParent = new Map<number | null, TreeFolder[]>()
@@ -519,6 +553,7 @@ onBeforeUnmount(() => {
         <p>Signed in as <strong>{{ store.username }}</strong></p>
       </div>
       <div class="top-actions">
+        <a class="ghost-link" href="/admin/streams">Live Streams</a>
         <button class="ghost" @click="store.doClearLogs">Clear Logs</button>
         <a class="ghost-link" href="/admin/logs/view" target="_blank" rel="noopener">View Logs</a>
         <a class="ghost-link" href="/admin/logs/download">Download Logs</a>
@@ -713,19 +748,35 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="preview-media">
+            <div v-if="previewMediaLoading && !previewMediaError" class="media-status" role="status">
+              Loading preview…
+            </div>
             <img
-              v-if="store.fileKind(store.activeFile) === 'image'"
-              :src="store.fileViewUrl(store.activeFile)"
+              v-if="store.fileKind(store.activeFile) === 'image' && !previewMediaError"
+              :src="previewMediaUrl"
               :alt="store.activeFile.original_name"
+              @load="onPreviewMediaLoad"
+              @error="onPreviewMediaError"
             />
             <video
-              v-else-if="store.fileKind(store.activeFile) === 'video'"
-              :key="store.activeFile.id"
-              :src="store.fileViewUrl(store.activeFile)"
+              v-else-if="store.fileKind(store.activeFile) === 'video' && !previewMediaError"
+              :key="`${store.activeFile.id}-${previewRetry}`"
+              :src="previewMediaUrl"
               controls
               preload="metadata"
               playsinline
+              @loadstart="previewMediaLoading = true"
+              @loadedmetadata="onPreviewMediaLoad"
+              @error="onPreviewMediaError"
             />
+            <div v-else-if="previewMediaError" class="media-error" role="alert">
+              <strong>Preview unavailable</strong>
+              <span>The browser could not decode this file or the media request failed.</span>
+              <div class="media-error-actions">
+                <button class="ghost" type="button" @click="retryPreview">Retry</button>
+                <a class="ghost-link" :href="store.fileDownloadUrl(store.activeFile)">Download original</a>
+              </div>
+            </div>
             <div v-else class="fallback large">{{ store.fileKind(store.activeFile).toUpperCase() }}</div>
           </div>
 

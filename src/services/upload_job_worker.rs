@@ -14,7 +14,10 @@ pub async fn spawn(state: AppState, worker_count: usize) {
 
     match db::reset_processing_upload_jobs(&state.db).await {
         Ok(reset_count) if reset_count > 0 => {
-            info!(count = reset_count, "re-queued stale processing upload jobs");
+            info!(
+                count = reset_count,
+                "re-queued stale processing upload jobs"
+            );
         }
         Ok(_) => {}
         Err(error) => {
@@ -61,7 +64,11 @@ async fn backfill_video_thumbnails(state: AppState) -> Result<()> {
         match file_service.generate_missing_thumbnail(&file).await {
             Ok(true) => generated += 1,
             Ok(false) => {}
-            Err(error) => error!(file_id = file.id, ?error, "thumbnail backfill failed for file"),
+            Err(error) => error!(
+                file_id = file.id,
+                ?error,
+                "thumbnail backfill failed for file"
+            ),
         }
     }
     info!(generated, "video thumbnail backfill completed");

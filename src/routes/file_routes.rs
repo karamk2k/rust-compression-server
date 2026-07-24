@@ -1,11 +1,10 @@
-use axum::{routing::get, Router, Json, extract::Path};
-use crate::file_compressor::FileCompressor;
 use crate::app_state::AppState;
+use crate::file_compressor::FileCompressor;
+use axum::{Json, Router, extract::Path, routing::get};
+use base64::{Engine as _, engine::general_purpose};
 use serde_json::json;
-use base64::{engine::general_purpose, Engine as _};
 use tower_http::cors::CorsLayer;
 use tracing::info;
-
 
 pub fn router() -> Router<AppState> {
     let cors = CorsLayer::permissive();

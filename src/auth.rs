@@ -1,4 +1,4 @@
-use axum::http::{header, HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::Response;
 
 use crate::app_state::AppState;
@@ -50,12 +50,21 @@ pub async fn authenticated_user_id(state: &AppState, headers: &HeaderMap) -> Opt
         }
 
         let auth_service = AuthService::new(state.db.clone());
-        if let Some(user_id) = auth_service.user_id_from_session(&token).await.ok().flatten() {
+        if let Some(user_id) = auth_service
+            .user_id_from_session(&token)
+            .await
+            .ok()
+            .flatten()
+        {
             return Some(user_id);
         }
     }
 
     let session_id = session_id_from_headers(headers)?;
     let auth_service = AuthService::new(state.db.clone());
-    auth_service.user_id_from_session(&session_id).await.ok().flatten()
+    auth_service
+        .user_id_from_session(&session_id)
+        .await
+        .ok()
+        .flatten()
 }

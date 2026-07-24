@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{info, warn};
 
 static THUMBNAIL_JOBS: Semaphore = Semaphore::const_new(2);

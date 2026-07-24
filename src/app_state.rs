@@ -16,6 +16,7 @@ pub struct AppState {
     pub r2_storage: Option<R2StorageService>,
     pub upload_dir: PathBuf,
     pub log_file: PathBuf,
+    pub live_hls_dir: PathBuf,
     pub api_token: Option<String>,
     pub api_token_user_id: Option<i64>,
 }

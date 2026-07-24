@@ -1,11 +1,10 @@
-
-use notify::{Watcher, RecursiveMode, watcher, DebouncedEvent};
+use crate::file_compressor::FileCompressor;
+use notify::{DebouncedEvent, RecursiveMode, Watcher, watcher};
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use std::path::{Path, PathBuf};
-use std::fs;
-use crate::file_compressor::FileCompressor;
 use tracing::{error, info};
 
 /// Watches folders and compresses new files with FileCompressor
@@ -32,14 +31,16 @@ impl FolderWatcher {
     fn compress_and_replace(&self, category: &str, file_path: &Path) {
         let filename = file_path.file_name().unwrap().to_str().unwrap();
         let folder_path = &self.folders[category];
-        
+
         // Get the relative path from the base folder
         let relative_path = file_path.strip_prefix(folder_path).unwrap_or(Path::new(""));
         let parent_path = relative_path.parent().unwrap_or(Path::new(""));
-        
+
         // Create the output path maintaining the subfolder structure
-        let output_path = folder_path.join(parent_path).join(format!("{}_{}.zst", category, filename));
-        
+        let output_path = folder_path
+            .join(parent_path)
+            .join(format!("{}_{}.zst", category, filename));
+
         // Ensure the subfolder exists
         if let Some(parent) = output_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
@@ -48,8 +49,7 @@ impl FolderWatcher {
             }
         }
 
-        if filename.ends_with(".zst") 
-        {
+        if filename.ends_with(".zst") {
             return;
         }
 
@@ -60,7 +60,10 @@ impl FolderWatcher {
             "compressing file"
         );
 
-        if let Err(e) = self.compressor.compress_file(file_path.to_str().unwrap(), output_path.to_str().unwrap()) {
+        if let Err(e) = self
+            .compressor
+            .compress_file(file_path.to_str().unwrap(), output_path.to_str().unwrap())
+        {
             error!(file = %filename, ?e, "failed to compress file");
             return;
         }

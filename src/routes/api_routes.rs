@@ -1,7 +1,8 @@
+use anyhow::{Result as AnyResult, anyhow};
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
@@ -10,7 +11,6 @@ use serde_json::json;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio_util::io::ReaderStream;
-use anyhow::{anyhow, Result as AnyResult};
 use tracing::error;
 use uuid::Uuid;
 
@@ -31,14 +31,20 @@ pub fn router() -> Router<AppState> {
         .route("/api/jobs/:id", get(get_upload_job))
         .route("/api/folders", get(list_folders).post(create_folder))
         .route("/api/folders/tree", get(list_folders_tree))
-        .route("/api/folders/:id", patch(update_folder).delete(delete_folder))
+        .route(
+            "/api/folders/:id",
+            patch(update_folder).delete(delete_folder),
+        )
         .route("/api/folders/path", get(get_folder_path))
         .route("/api/files", get(list_files))
         .route("/api/files/summary", get(get_file_summary))
         .route("/api/files/move-batch", patch(move_files_batch))
         .route("/api/files/delete-batch", post(delete_files_batch))
         .route("/api/files/:id/move", patch(move_file_to_folder))
-        .route("/api/files/:id/share", post(shares_controller::create_file_share))
+        .route(
+            "/api/files/:id/share",
+            post(shares_controller::create_file_share),
+        )
         .route("/api/files/:id/thumb", get(file_thumbnail))
         .route("/api/files/:id/view", get(view_file))
         .route("/api/files/:id/download", get(download_file))
@@ -228,7 +234,10 @@ async fn upload_file(
     }
 
     let Some((original_name, temp_path)) = pending_file else {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "missing file field" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "missing file field" }),
+        );
     };
 
     if let Some(folder_id) = selected_folder_id {
@@ -236,7 +245,10 @@ async fn upload_file(
             Ok(true) => {}
             Ok(false) => {
                 let _ = tokio::fs::remove_file(&temp_path).await;
-                return json_response(StatusCode::BAD_REQUEST, json!({ "error": "invalid folder_id" }));
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": "invalid folder_id" }),
+                );
             }
             Err(error) => {
                 let _ = tokio::fs::remove_file(&temp_path).await;
@@ -375,7 +387,10 @@ async fn create_folder(
 
     let folder_name = sanitize_folder_name(&payload.name);
     if folder_name.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "folder name is required" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "folder name is required" }),
+        );
     }
 
     if let Some(parent_id) = payload.parent_id {
@@ -396,7 +411,14 @@ async fn create_folder(
         }
     }
 
-    match db::folder_name_exists_for_user_and_parent(&state.db, user_id, payload.parent_id, &folder_name).await {
+    match db::folder_name_exists_for_user_and_parent(
+        &state.db,
+        user_id,
+        payload.parent_id,
+        &folder_name,
+    )
+    .await
+    {
         Ok(true) => {
             return json_response(
                 StatusCode::CONFLICT,
@@ -466,7 +488,12 @@ async fn update_folder(
 
     let existing = match db::get_folder_by_id_for_user(&state.db, id, user_id).await {
         Ok(Some(folder)) => folder,
-        Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" })),
+        Ok(None) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "folder not found" }),
+            );
+        }
         Err(error) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -480,7 +507,10 @@ async fn update_folder(
         None => existing.name.clone(),
     };
     if target_name.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "folder name is required" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "folder name is required" }),
+        );
     }
 
     let target_parent_id = payload.parent_id.unwrap_or(existing.parent_id);
@@ -553,9 +583,16 @@ async fn update_folder(
         }
     }
 
-    match db::update_folder_by_id_for_user(&state.db, id, user_id, &target_name, target_parent_id).await {
+    match db::update_folder_by_id_for_user(&state.db, id, user_id, &target_name, target_parent_id)
+        .await
+    {
         Ok(true) => {}
-        Ok(false) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" })),
+        Ok(false) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "folder not found" }),
+            );
+        }
         Err(error) => {
             let message = error.to_string();
             if message.contains("UNIQUE constraint failed") {
@@ -573,7 +610,10 @@ async fn update_folder(
 
     match db::get_folder_by_id_for_user(&state.db, id, user_id).await {
         Ok(Some(folder)) => Json(folder).into_response(),
-        Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" })),
+        Ok(None) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "folder not found" }),
+        ),
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": format!("failed to load folder: {}", error) }),
@@ -603,10 +643,14 @@ async fn delete_folder(
         }
     };
     if !exists {
-        return json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" }));
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "folder not found" }),
+        );
     }
 
-    let direct_subfolders = match db::count_direct_subfolders_for_user(&state.db, user_id, id).await {
+    let direct_subfolders = match db::count_direct_subfolders_for_user(&state.db, user_id, id).await
+    {
         Ok(count) => count,
         Err(error) => {
             return json_response(
@@ -638,15 +682,16 @@ async fn delete_folder(
         );
     }
 
-    let active_jobs = match db::count_active_upload_jobs_for_user_in_folder(&state.db, user_id, id).await {
-        Ok(count) => count,
-        Err(error) => {
-            return json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": format!("failed to check upload jobs: {}", error) }),
-            );
-        }
-    };
+    let active_jobs =
+        match db::count_active_upload_jobs_for_user_in_folder(&state.db, user_id, id).await {
+            Ok(count) => count,
+            Err(error) => {
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("failed to check upload jobs: {}", error) }),
+                );
+            }
+        };
     if active_jobs > 0 {
         return json_response(
             StatusCode::CONFLICT,
@@ -656,7 +701,10 @@ async fn delete_folder(
 
     match db::delete_folder_by_id_for_user(&state.db, id, user_id).await {
         Ok(true) => json_response(StatusCode::OK, json!({ "deleted": true, "id": id })),
-        Ok(false) => json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" })),
+        Ok(false) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "folder not found" }),
+        ),
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": format!("failed to delete folder: {}", error) }),
@@ -682,9 +730,15 @@ async fn get_folder_path(
 
     match db::list_folder_path_for_user(&state.db, folder_id, user_id).await {
         Ok(path) => {
-            let valid = path.last().map(|folder| folder.id == folder_id).unwrap_or(false);
+            let valid = path
+                .last()
+                .map(|folder| folder.id == folder_id)
+                .unwrap_or(false);
             if !valid {
-                return json_response(StatusCode::NOT_FOUND, json!({ "error": "folder not found" }));
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    json!({ "error": "folder not found" }),
+                );
             }
             Json(path).into_response()
         }
@@ -710,7 +764,12 @@ async fn list_files(
     if let Some(folder_id) = query.folder_id {
         match db::folder_exists_for_user(&state.db, folder_id, user_id).await {
             Ok(true) => {}
-            Ok(false) => return json_response(StatusCode::BAD_REQUEST, json!({ "error": "invalid folder_id" })),
+            Ok(false) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": "invalid folder_id" }),
+                );
+            }
             Err(error) => {
                 return json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -764,7 +823,10 @@ async fn list_files(
         state.upload_dir.clone(),
     );
 
-    match file_service.list_files_for_user(user_id, query.folder_id).await {
+    match file_service
+        .list_files_for_user(user_id, query.folder_id)
+        .await
+    {
         Ok(files) => Json(files).into_response(),
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -808,8 +870,12 @@ async fn move_file_to_folder(
 
     let file = match db::get_file_by_id(&state.db, id).await {
         Ok(Some(file)) if file.uploaded_by == user_id => file,
-        Ok(Some(_)) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
-        Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
+        Ok(Some(_)) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
+        Ok(None) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
         Err(error) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -868,10 +934,16 @@ async fn move_files_batch(
 
     let ids = normalize_ids(&payload.ids);
     if ids.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "ids must not be empty" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "ids must not be empty" }),
+        );
     }
     if ids.len() > 500 {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "too many ids (max 500)" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "too many ids (max 500)" }),
+        );
     }
 
     if let Some(folder_id) = payload.folder_id {
@@ -903,7 +975,9 @@ async fn move_files_batch(
                 continue;
             }
             Err(error) => {
-                failed.push(json!({ "id": file_id, "error": format!("failed to load file: {}", error) }));
+                failed.push(
+                    json!({ "id": file_id, "error": format!("failed to load file: {}", error) }),
+                );
                 continue;
             }
         };
@@ -913,11 +987,14 @@ async fn move_files_batch(
             continue;
         }
 
-        match db::move_file_to_folder_for_user(&state.db, file_id, user_id, payload.folder_id).await {
+        match db::move_file_to_folder_for_user(&state.db, file_id, user_id, payload.folder_id).await
+        {
             Ok(true) => moved_ids.push(file_id),
             Ok(false) => failed.push(json!({ "id": file_id, "error": "file not found" })),
             Err(error) => {
-                failed.push(json!({ "id": file_id, "error": format!("failed to move file: {}", error) }));
+                failed.push(
+                    json!({ "id": file_id, "error": format!("failed to move file: {}", error) }),
+                );
             }
         }
     }
@@ -943,10 +1020,16 @@ async fn delete_files_batch(
 
     let ids = normalize_ids(&payload.ids);
     if ids.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "ids must not be empty" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "ids must not be empty" }),
+        );
     }
     if ids.len() > 500 {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "too many ids (max 500)" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "too many ids (max 500)" }),
+        );
     }
 
     let file_service = FileService::new(
@@ -965,7 +1048,9 @@ async fn delete_files_batch(
         match file_service.delete_file_by_id(file_id, user_id).await {
             Ok(true) => deleted_ids.push(file_id),
             Ok(false) => failed.push(json!({ "id": file_id, "error": "file not found" })),
-            Err(error) => failed.push(json!({ "id": file_id, "error": format!("delete failed: {}", error) })),
+            Err(error) => {
+                failed.push(json!({ "id": file_id, "error": format!("delete failed: {}", error) }))
+            }
         }
     }
 
@@ -978,7 +1063,11 @@ async fn delete_files_batch(
     )
 }
 
-async fn file_thumbnail(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn file_thumbnail(
+    Path(id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let user_id = match authenticated_user_id(&state, &headers).await {
         Some(user_id) => user_id,
         None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
@@ -986,7 +1075,9 @@ async fn file_thumbnail(Path(id): Path<i64>, State(state): State<AppState>, head
 
     let file = match db::get_file_by_id(&state.db, id).await {
         Ok(Some(file)) if file.uploaded_by == user_id => file,
-        Ok(Some(_)) | Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
+        Ok(Some(_)) | Ok(None) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
         Err(error) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1036,10 +1127,17 @@ async fn file_thumbnail(Path(id): Path<i64>, State(state): State<AppState>, head
             ),
         };
     }
-    json_response(StatusCode::NOT_FOUND, json!({ "error": "thumbnail not available for this file type" }))
+    json_response(
+        StatusCode::NOT_FOUND,
+        json!({ "error": "thumbnail not available for this file type" }),
+    )
 }
 
-async fn view_file(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn view_file(
+    Path(id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let user_id = match authenticated_user_id(&state, &headers).await {
         Some(user_id) => user_id,
         None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
@@ -1061,8 +1159,12 @@ async fn view_file(Path(id): Path<i64>, State(state): State<AppState>, headers: 
 
     let file = match file_service.get_file_by_id(id).await {
         Ok(Some(file)) if file.uploaded_by == user_id => file,
-        Ok(Some(_)) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
-        Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
+        Ok(Some(_)) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
+        Ok(None) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
         Err(error) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1074,7 +1176,13 @@ async fn view_file(Path(id): Path<i64>, State(state): State<AppState>, headers: 
     let content_type = content_type_for_name(&file.original_name);
     if file.is_compressed {
         return match file_service.view_file_bytes(id).await {
-            Ok(Some((file_name, bytes))) => bytes_response(&file_name, content_type, bytes, false),
+            Ok(Some((file_name, bytes))) => bytes_response(
+                &file_name,
+                detected_content_type(&bytes).unwrap_or(content_type),
+                bytes,
+                false,
+                range_header.as_deref(),
+            ),
             Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
             Err(error) => json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1119,7 +1227,11 @@ async fn view_file(Path(id): Path<i64>, State(state): State<AppState>, headers: 
     }
 }
 
-async fn download_file(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn download_file(
+    Path(id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let user_id = match authenticated_user_id(&state, &headers).await {
         Some(user_id) => user_id,
         None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
@@ -1136,8 +1248,12 @@ async fn download_file(Path(id): Path<i64>, State(state): State<AppState>, heade
 
     let file = match file_service.get_file_by_id(id).await {
         Ok(Some(file)) if file.uploaded_by == user_id => file,
-        Ok(Some(_)) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
-        Ok(None) => return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
+        Ok(Some(_)) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
+        Ok(None) => {
+            return json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" }));
+        }
         Err(error) => {
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1149,7 +1265,13 @@ async fn download_file(Path(id): Path<i64>, State(state): State<AppState>, heade
     let content_type = content_type_for_name(&file.original_name);
     if file.is_compressed {
         return match file_service.view_file_bytes(id).await {
-            Ok(Some((file_name, bytes))) => bytes_response(&file_name, content_type, bytes, true),
+            Ok(Some((file_name, bytes))) => bytes_response(
+                &file_name,
+                detected_content_type(&bytes).unwrap_or(content_type),
+                bytes,
+                true,
+                None,
+            ),
             Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
             Err(error) => json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1194,7 +1316,11 @@ async fn download_file(Path(id): Path<i64>, State(state): State<AppState>, heade
     }
 }
 
-async fn delete_file(Path(id): Path<i64>, State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn delete_file(
+    Path(id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let user_id = match authenticated_user_id(&state, &headers).await {
         Some(user_id) => user_id,
         None => return json_response(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" })),
@@ -1270,7 +1396,10 @@ fn is_image_name(file_name: &str) -> bool {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg")
+    matches!(
+        ext.as_str(),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg"
+    )
 }
 
 fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
@@ -1282,17 +1411,41 @@ fn bytes_response(
     content_type: &'static str,
     bytes: Vec<u8>,
     as_attachment: bool,
+    range_header: Option<&str>,
 ) -> Response {
-    let mut response = Response::new(Body::from(bytes));
-    *response.status_mut() = StatusCode::OK;
+    let total_size = bytes.len() as u64;
+    let parsed_range = parse_range_header(range_header, total_size);
+    if matches!(parsed_range, ParsedRange::Invalid) {
+        return range_not_satisfiable_response(total_size, content_type, file_name, as_attachment);
+    }
+
+    let (status, body, content_length, content_range) = match parsed_range {
+        ParsedRange::Full => (StatusCode::OK, Body::from(bytes), total_size, None),
+        ParsedRange::Partial { start, end } => {
+            let content_length = end - start + 1;
+            let body = Body::from(bytes[start as usize..=end as usize].to_vec());
+            (
+                StatusCode::PARTIAL_CONTENT,
+                body,
+                content_length,
+                Some(format!("bytes {start}-{end}/{total_size}")),
+            )
+        }
+        ParsedRange::Invalid => unreachable!(),
+    };
+
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    if let Ok(value) = HeaderValue::from_str(&content_disposition_value(file_name, as_attachment)) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_DISPOSITION, value);
-    }
+    apply_media_headers(
+        &mut response,
+        file_name,
+        as_attachment,
+        content_length,
+        content_range.as_deref(),
+    );
     response
 }
 
@@ -1323,31 +1476,13 @@ async fn stream_r2_object_response(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    response
-        .headers_mut()
-        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-
-    if let Some(content_length) = object_stream.content_length {
-        if content_length >= 0 {
-            if let Ok(value) = HeaderValue::from_str(&content_length.to_string()) {
-                response
-                    .headers_mut()
-                    .insert(header::CONTENT_LENGTH, value);
-            }
-        }
-    }
-
-    if let Some(content_range) = object_stream.content_range {
-        if let Ok(value) = HeaderValue::from_str(&content_range) {
-            response.headers_mut().insert(header::CONTENT_RANGE, value);
-        }
-    }
-
-    if let Ok(value) = HeaderValue::from_str(&content_disposition_value(file_name, as_attachment)) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_DISPOSITION, value);
-    }
+    apply_media_headers(
+        &mut response,
+        file_name,
+        as_attachment,
+        object_stream.content_length.unwrap_or_default().max(0) as u64,
+        object_stream.content_range.as_deref(),
+    );
 
     Ok(response)
 }
@@ -1373,7 +1508,9 @@ async fn stream_uncompressed_file_response(
         response
             .headers_mut()
             .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-        if let Ok(value) = HeaderValue::from_str(&content_disposition_value(file_name, as_attachment)) {
+        if let Ok(value) =
+            HeaderValue::from_str(&content_disposition_value(file_name, as_attachment))
+        {
             response
                 .headers_mut()
                 .insert(header::CONTENT_DISPOSITION, value);
@@ -1383,23 +1520,12 @@ async fn stream_uncompressed_file_response(
 
     let parsed_range = parse_range_header(range_header, total_size);
     if matches!(parsed_range, ParsedRange::Invalid) {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-        response
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-        response
-            .headers_mut()
-            .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-        if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total_size}")) {
-            response.headers_mut().insert(header::CONTENT_RANGE, value);
-        }
-        if let Ok(value) = HeaderValue::from_str(&content_disposition_value(file_name, as_attachment)) {
-            response
-                .headers_mut()
-                .insert(header::CONTENT_DISPOSITION, value);
-        }
-        return Ok(response);
+        return Ok(range_not_satisfiable_response(
+            total_size,
+            content_type,
+            file_name,
+            as_attachment,
+        ));
     }
 
     let mut file = File::open(file_path).await?;
@@ -1427,31 +1553,82 @@ async fn stream_uncompressed_file_response(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    apply_media_headers(
+        &mut response,
+        file_name,
+        as_attachment,
+        content_length,
+        content_range.as_deref(),
+    );
+
+    Ok(response)
+}
+
+fn content_disposition_value(file_name: &str, as_attachment: bool) -> String {
+    let disposition_kind = if as_attachment {
+        "attachment"
+    } else {
+        "inline"
+    };
+    let safe_name = file_name
+        .chars()
+        .map(|character| match character {
+            '"' | '\r' | '\n' | '\\' => '_',
+            _ => character,
+        })
+        .collect::<String>();
+    format!("{disposition_kind}; filename=\"{safe_name}\"")
+}
+
+fn apply_media_headers(
+    response: &mut Response,
+    file_name: &str,
+    as_attachment: bool,
+    content_length: u64,
+    content_range: Option<&str>,
+) {
     response
         .headers_mut()
         .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
     if let Ok(value) = HeaderValue::from_str(&content_length.to_string()) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_LENGTH, value);
+        response.headers_mut().insert(header::CONTENT_LENGTH, value);
     }
-    if let Some(content_range) = content_range {
-        if let Ok(value) = HeaderValue::from_str(&content_range) {
-            response.headers_mut().insert(header::CONTENT_RANGE, value);
-        }
+    if let Some(content_range) = content_range
+        && let Ok(value) = HeaderValue::from_str(content_range)
+    {
+        response.headers_mut().insert(header::CONTENT_RANGE, value);
     }
     if let Ok(value) = HeaderValue::from_str(&content_disposition_value(file_name, as_attachment)) {
         response
             .headers_mut()
             .insert(header::CONTENT_DISPOSITION, value);
     }
-
-    Ok(response)
 }
 
-fn content_disposition_value(file_name: &str, as_attachment: bool) -> String {
-    let disposition_kind = if as_attachment { "attachment" } else { "inline" };
-    format!("{disposition_kind}; filename=\"{}\"", file_name.replace('"', "_"))
+fn range_not_satisfiable_response(
+    total_size: u64,
+    content_type: &'static str,
+    file_name: &str,
+    as_attachment: bool,
+) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    apply_media_headers(&mut response, file_name, as_attachment, 0, None);
+    if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total_size}")) {
+        response.headers_mut().insert(header::CONTENT_RANGE, value);
+    }
+    response
 }
 
 enum ParsedRange {
@@ -1469,7 +1646,10 @@ fn parse_range_header(range_header: Option<&str>, total_size: u64) -> ParsedRang
         return ParsedRange::Invalid;
     };
 
-    let first = specifier.split(',').next().unwrap_or("").trim();
+    if specifier.contains(',') || total_size == 0 {
+        return ParsedRange::Invalid;
+    }
+    let first = specifier.trim();
     if first.is_empty() {
         return ParsedRange::Invalid;
     }
@@ -1516,6 +1696,26 @@ fn parse_range_header(range_header: Option<&str>, total_size: u64) -> ParsedRang
     ParsedRange::Partial { start, end }
 }
 
+fn detected_content_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\xFF\xD8\xFF") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        Some("video/mp4")
+    } else if bytes.starts_with(b"\x1A\x45\xDF\xA3") {
+        Some("video/webm")
+    } else if bytes.starts_with(b"%PDF-") {
+        Some("application/pdf")
+    } else {
+        None
+    }
+}
+
 fn content_type_for_name(file_name: &str) -> &'static str {
     let ext = file_name
         .rsplit('.')
@@ -1543,5 +1743,43 @@ fn content_type_for_name(file_name: &str) -> &'static str {
         }
         "pdf" => "application/pdf",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParsedRange, parse_range_header};
+
+    #[test]
+    fn parses_bounded_open_and_suffix_ranges() {
+        assert!(matches!(
+            parse_range_header(Some("bytes=2-5"), 10),
+            ParsedRange::Partial { start: 2, end: 5 }
+        ));
+        assert!(matches!(
+            parse_range_header(Some("bytes=7-"), 10),
+            ParsedRange::Partial { start: 7, end: 9 }
+        ));
+        assert!(matches!(
+            parse_range_header(Some("bytes=-3"), 10),
+            ParsedRange::Partial { start: 7, end: 9 }
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_unsatisfiable_and_multiple_ranges() {
+        for value in [
+            "items=0-1",
+            "bytes=",
+            "bytes=20-",
+            "bytes=4-2",
+            "bytes=0-1,4-5",
+            "bytes=-0",
+        ] {
+            assert!(
+                matches!(parse_range_header(Some(value), 10), ParsedRange::Invalid),
+                "{value}"
+            );
+        }
     }
 }

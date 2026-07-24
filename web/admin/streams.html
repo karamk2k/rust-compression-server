@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Live Streams · K2K Cloud</title>
+  <link rel="stylesheet" href="/assets/admin/streams.css">
+  <script src="/assets/admin/streams.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <span class="eyebrow">K2K CLOUD</span>
+      <h1>Live control room</h1>
+    </div>
+    <nav><a href="/admin/files">Files</a><button id="logout">Log out</button></nav>
+  </header>
+  <main>
+    <section class="create">
+      <div><h2>Create a 1080p stream</h2><p>One source quality, delivered as low-overhead HLS.</p></div>
+      <form id="create-form"><input id="title" maxlength="120" placeholder="Stream title" required><button>Create stream</button></form>
+    </section>
+    <p id="message" role="status"></p>
+    <section id="streams" class="grid" aria-live="polite"></section>
+  </main>
+  <template id="stream-template">
+    <article class="card">
+      <div class="card-head"><div><span class="status"></span><h2 class="stream-title"></h2></div><label class="switch"><input class="enabled" type="checkbox"><span></span></label></div>
+      <dl><div><dt>Stream ID</dt><dd class="public-id"></dd></div><div><dt>OBS server</dt><dd><code class="obs-server"></code></dd></div></dl>
+      <div class="actions"><button class="rotate secondary">Generate new OBS key</button><button class="viewer secondary">Create viewer link</button></div>
+      <div class="secret" hidden><strong class="secret-label"></strong><code class="secret-value"></code><button class="copy">Copy</button><small>This secret is shown only now. Save it before closing.</small></div>
+      <details><summary>Viewer access keys</summary><div class="viewer-keys"></div></details>
+    </article>
+  </template>
+</body>
+</html>

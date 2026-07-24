@@ -1,13 +1,13 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use aws_credential_types::Credentials;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{
     Builder as S3ConfigBuilder, Region, RequestChecksumCalculation, ResponseChecksumValidation,
 };
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
@@ -139,9 +139,9 @@ impl R2StorageService {
                     sleep(Duration::from_millis(backoff_ms)).await;
                 }
                 Err(error) => {
-                    return Err(error).with_context(|| format!(
-                        "failed to upload object key={key} after {max_attempts} attempts"
-                    ));
+                    return Err(error).with_context(|| {
+                        format!("failed to upload object key={key} after {max_attempts} attempts")
+                    });
                 }
             }
         }
@@ -151,7 +151,8 @@ impl R2StorageService {
 
     pub async fn get_object_bytes(&self, db_path: &str) -> Result<Vec<u8>> {
         let key = self.key_from_db_path(db_path)?;
-        let output = self.client
+        let output = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -175,7 +176,8 @@ impl R2StorageService {
         use tokio::io::AsyncWriteExt;
 
         let key = self.key_from_db_path(db_path)?;
-        let output = self.client
+        let output = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -197,11 +199,7 @@ impl R2StorageService {
         range_header: Option<&str>,
     ) -> Result<R2ObjectStream> {
         let key = self.key_from_db_path(db_path)?;
-        let mut request = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key);
+        let mut request = self.client.get_object().bucket(&self.bucket).key(key);
 
         if let Some(range) = range_header {
             if !range.trim().is_empty() {

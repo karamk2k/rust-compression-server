@@ -29,6 +29,7 @@ pub struct AppConfig {
     pub upload_dir: String,
     pub log_file: String,
     pub log_level: String,
+    pub live_hls_dir: String,
     pub admin_username: String,
     pub admin_password: String,
     pub api_token: Option<String>,
@@ -84,9 +85,9 @@ impl AppConfig {
         let upload_dir = env::var("UPLOAD_DIR").unwrap_or_else(|_| "storage/uploads".to_string());
         let log_file = env::var("LOG_FILE").unwrap_or_else(|_| "storage/logs/app.log".to_string());
         let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+        let live_hls_dir = env::var("LIVE_HLS_DIR").unwrap_or_else(|_| "/var/www/hls".to_string());
         let admin_username = env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
-        let admin_password =
-            env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
+        let admin_password = env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
         let api_token = env::var("API_TOKEN")
             .ok()
             .map(|value| value.trim().to_string())
@@ -115,6 +116,7 @@ impl AppConfig {
             upload_dir,
             log_file,
             log_level,
+            live_hls_dir,
             admin_username,
             admin_password,
             api_token,

@@ -21,6 +21,8 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "chrono"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
 argon2 = "0.5"
 rand = "0.8"
 tracing = "0.1"

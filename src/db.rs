@@ -1,6 +1,6 @@
 use anyhow::Result;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use rand::rngs::OsRng;
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -19,9 +19,9 @@ pub async fn ensure_admin_user(pool: &SqlitePool, username: &str, password: &str
     let existing = sqlx::query_as::<_, LoginUser>(
         "SELECT id, password_hash FROM users WHERE username = ?1 LIMIT 1",
     )
-        .bind(username)
-        .fetch_optional(pool)
-        .await?;
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
 
     match existing {
         Some(user) => {
@@ -109,7 +109,10 @@ pub async fn user_id_from_session(
     Ok(row.map(|x| x.0))
 }
 
-pub async fn username_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<String>, sqlx::Error> {
+pub async fn username_by_id(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?1 LIMIT 1")
         .bind(user_id)
         .fetch_optional(pool)
@@ -126,7 +129,10 @@ pub async fn user_id_by_username(
         .await
 }
 
-pub async fn insert_file(pool: &SqlitePool, record: &NewFileRecord<'_>) -> Result<i64, sqlx::Error> {
+pub async fn insert_file(
+    pool: &SqlitePool,
+    record: &NewFileRecord<'_>,
+) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         "INSERT INTO files (original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -200,7 +206,10 @@ pub async fn summarize_files_for_user(
     .await
 }
 
-pub async fn get_file_by_id(pool: &SqlitePool, file_id: i64) -> Result<Option<FileRecord>, sqlx::Error> {
+pub async fn get_file_by_id(
+    pool: &SqlitePool,
+    file_id: i64,
+) -> Result<Option<FileRecord>, sqlx::Error> {
     sqlx::query_as::<_, FileRecord>(
         "SELECT id, original_name, folder_id, stored_path, compressed_path, thumbnail_path, is_compressed, original_size, compressed_size, uploaded_by, created_at \
          FROM files WHERE id = ?1 LIMIT 1",
@@ -260,14 +269,13 @@ pub async fn insert_folder(
     pool: &SqlitePool,
     record: &NewFolderRecord<'_>,
 ) -> Result<i64, sqlx::Error> {
-    let result = sqlx::query(
-        "INSERT INTO folders (name, parent_id, created_by) VALUES (?1, ?2, ?3)",
-    )
-    .bind(record.name)
-    .bind(record.parent_id)
-    .bind(record.created_by)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("INSERT INTO folders (name, parent_id, created_by) VALUES (?1, ?2, ?3)")
+            .bind(record.name)
+            .bind(record.parent_id)
+            .bind(record.created_by)
+            .execute(pool)
+            .await?;
     Ok(result.last_insert_rowid())
 }
 
@@ -462,14 +470,12 @@ pub async fn move_file_to_folder_for_user(
     user_id: i64,
     folder_id: Option<i64>,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE files SET folder_id = ?1 WHERE id = ?2 AND uploaded_by = ?3",
-    )
-    .bind(folder_id)
-    .bind(file_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
+    let result = sqlx::query("UPDATE files SET folder_id = ?1 WHERE id = ?2 AND uploaded_by = ?3")
+        .bind(folder_id)
+        .bind(file_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 

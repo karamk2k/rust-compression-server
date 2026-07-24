@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::extract::{Form, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -103,18 +103,17 @@ async fn download_logs(State(state): State<AppState>, headers: HeaderMap) -> Res
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let mut response = Response::new(Body::empty());
             *response.status_mut() = StatusCode::OK;
-            response
-                .headers_mut()
-                .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
             response
                 .headers_mut()
                 .insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
-            response
-                .headers_mut()
-                .insert(
-                    header::CONTENT_DISPOSITION,
-                    HeaderValue::from_static("attachment; filename=\"app.log\""),
-                );
+            response.headers_mut().insert(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"app.log\""),
+            );
             return response;
         }
         Err(error) => {
@@ -135,15 +134,17 @@ async fn download_logs(State(state): State<AppState>, headers: HeaderMap) -> Res
     let stream = ReaderStream::new(file);
     let mut response = Response::new(Body::from_stream(stream));
     *response.status_mut() = StatusCode::OK;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     if let Ok(value) = HeaderValue::from_str(&metadata.len().to_string()) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_LENGTH, value);
+        response.headers_mut().insert(header::CONTENT_LENGTH, value);
     }
-    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file_name.replace('"', "_"))) {
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        file_name.replace('"', "_")
+    )) {
         response
             .headers_mut()
             .insert(header::CONTENT_DISPOSITION, value);

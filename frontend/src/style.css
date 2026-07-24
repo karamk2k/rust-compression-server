@@ -448,6 +448,28 @@ button,
   object-fit: cover;
 }
 
+.media-status,
+.media-error {
+  display: grid;
+  place-content: center;
+  gap: 0.65rem;
+  min-height: 220px;
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.media-error strong {
+  color: var(--text);
+}
+
+.media-error-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 0.35rem;
+}
+
 .meta {
   margin-top: 10px;
   font-size: 13px;

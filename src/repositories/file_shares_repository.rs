@@ -17,10 +17,7 @@ pub async fn find_by_uuid(
     .await
 }
 
-pub async fn insert(
-    pool: &SqlitePool,
-    record: &NewFileShareRecord,
-) -> Result<i64, sqlx::Error> {
+pub async fn insert(pool: &SqlitePool, record: &NewFileShareRecord) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         "INSERT INTO file_shares (file_id, uuid, expires_at)
          VALUES (?1, ?2, ?3)",

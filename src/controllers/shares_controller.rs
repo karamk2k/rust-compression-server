@@ -1,8 +1,8 @@
-use chrono::{DateTime, Duration, Utc};
-use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -46,7 +46,10 @@ pub async fn create_file_share(
             .map(|hours| Utc::now() + Duration::hours(hours.clamp(1, 24 * 30)))
     });
 
-    match file_share_service.create_share(file_id, user_id, expires_at).await {
+    match file_share_service
+        .create_share(file_id, user_id, expires_at)
+        .await
+    {
         Ok(Some(share)) => Json(CreateShareResponse {
             id: share.id,
             uuid: share.uuid.clone(),
@@ -103,7 +106,9 @@ pub async fn view_shared_file(Path(uuid): Path<String>, State(state): State<AppS
     );
 
     match file_service.view_file_bytes(share.file_id).await {
-        Ok(Some((file_name, bytes))) => bytes_response(&file_name, content_type_for_name(&file_name), bytes),
+        Ok(Some((file_name, bytes))) => {
+            bytes_response(&file_name, content_type_for_name(&file_name), bytes)
+        }
         Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "file not found" })),
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -122,14 +127,23 @@ fn bytes_response(file_name: &str, content_type: &'static str, bytes: Vec<u8>) -
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    if let Ok(value) = HeaderValue::from_str(&format!("inline; filename=\"{}\"", file_name.replace('"', "_"))) {
-        response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "inline; filename=\"{}\"",
+        file_name.replace('"', "_")
+    )) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
     }
     response
 }
 
 fn content_type_for_name(file_name: &str) -> &'static str {
-    let ext = file_name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let ext = file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",

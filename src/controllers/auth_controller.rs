@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 use serde_json::json;
 
@@ -23,7 +23,11 @@ pub async fn get_me(State(state): State<AppState>, headers: HeaderMap) -> Respon
 
     let auth_service = AuthService::new(state.db.clone());
     match auth_service.username_by_id(user_id).await {
-        Ok(Some(username)) => Json(CurrentUserResponse { id: user_id, username }).into_response(),
+        Ok(Some(username)) => Json(CurrentUserResponse {
+            id: user_id,
+            username,
+        })
+        .into_response(),
         Ok(None) => json_response(StatusCode::NOT_FOUND, json!({ "error": "user not found" })),
         Err(error) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,

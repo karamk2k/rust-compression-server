@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{STREAM_TITLE}} · Live</title>
+  <link rel="stylesheet" href="/assets/app/app.css">
+</head>
+<body class="live-watch">
+  <main class="watch-shell">
+    <div class="live-label"><span></span> LIVE</div>
+    <h1>{{STREAM_TITLE}}</h1>
+    <div class="player-frame">
+      <video id="live-player" class="video-js vjs-big-play-centered" controls playsinline preload="auto" data-stream-id="{{STREAM_ID}}"></video>
+    </div>
+    <p id="player-status">Connecting to the live stream…</p>
+  </main>
+  <script type="module" src="/assets/app/live.js"></script>
+</body>
+</html>

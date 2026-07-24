@@ -1,8 +1,8 @@
+use base64::{Engine as _, engine::general_purpose};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Cursor, Read, Write};
-use base64::{engine::general_purpose, Engine as _};
-use zstd::stream::{Encoder, Decoder};
 use tracing::debug;
+use zstd::stream::{Decoder, Encoder};
 
 /// FileCompressor struct
 #[derive(Debug, Clone)]
@@ -22,11 +22,7 @@ impl FileCompressor {
     }
 
     /// Compress any file to a .zst file
-    pub fn compress_file(
-        &self,
-        input_path: &str,
-        output_path: &str,
-    ) -> std::io::Result<()> {
+    pub fn compress_file(&self, input_path: &str, output_path: &str) -> std::io::Result<()> {
         let input_file = File::open(input_path)?;
         let compressed_file = File::create(output_path)?;
         let mut reader = BufReader::new(input_file);
@@ -37,11 +33,7 @@ impl FileCompressor {
     }
 
     /// Decompress a .zst file back to original
-    pub fn decompress_file(
-        &self,
-        input_path: &str,
-        output_path: &str,
-    ) -> std::io::Result<()> {
+    pub fn decompress_file(&self, input_path: &str, output_path: &str) -> std::io::Result<()> {
         let compressed_file = File::open(input_path)?;
         let mut decoder = Decoder::new(BufReader::new(compressed_file))?;
         let mut output_file = File::create(output_path)?;
@@ -61,7 +53,7 @@ impl FileCompressor {
     /// Decompress a .zst file into memory
     pub fn decompress_file_to_bytes(&self, input_path: &str) -> std::io::Result<Vec<u8>> {
         // let base_dir = "/home/karamk2k/Desktop/rust/compression/storage/file_1";
-        let compressed_file = File::open(format!("{}",input_path))?;
+        let compressed_file = File::open(input_path)?;
         debug!(path = %input_path, "decompressing file to bytes");
         let mut decoder = Decoder::new(BufReader::new(compressed_file))?;
         let mut buf = Vec::new();
@@ -78,11 +70,7 @@ impl FileCompressor {
     }
 
     /// Decompress a base64 string back to bytes and write to file
-    pub fn decompress_base64_to_file(
-        &self,
-        b64: &str,
-        output_path: &str,
-    ) -> std::io::Result<()> {
+    pub fn decompress_base64_to_file(&self, b64: &str, output_path: &str) -> std::io::Result<()> {
         let compressed = general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -99,5 +87,25 @@ impl FileCompressor {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let decompressed = zstd::decode_all(&compressed[..])?;
         Ok(decompressed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileCompressor;
+
+    #[test]
+    fn compression_round_trip_preserves_bytes() {
+        let compressor = FileCompressor::new(3);
+        let original = b"cloud storage payload\0with binary bytes\xff";
+        let compressed = zstd::encode_all(&original[..], compressor.level).unwrap();
+        let decoded = compressor.decompress_bytes(&compressed).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn corrupted_compressed_data_is_rejected() {
+        let compressor = FileCompressor::new(3);
+        assert!(compressor.decompress_bytes(b"not a zstd frame").is_err());
     }
 }

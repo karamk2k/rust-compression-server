@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use sqlx::SqlitePool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::config::StorageBackend;
 use crate::db;
 use crate::file_compressor::FileCompressor;
-use crate::models::file_model::{ FileRecord, NewFileRecord, UploadResult };
+use crate::models::file_model::{FileRecord, NewFileRecord, UploadResult};
 use crate::services::media_transcode_service::MediaTranscodeService;
 use crate::services::r2_storage_service::R2StorageService;
 
@@ -88,18 +88,22 @@ impl FileService {
         };
 
         if should_try_zstd(&ext) {
-            let candidate_compressed_path = self.upload_dir.join(format!("{}.zst", stored_filename));
-            let candidate_compressed_path_str = candidate_compressed_path.to_string_lossy().to_string();
+            let candidate_compressed_path =
+                self.upload_dir.join(format!("{}.zst", stored_filename));
+            let candidate_compressed_path_str =
+                candidate_compressed_path.to_string_lossy().to_string();
 
             let compressor = self.compressor.clone();
             let input_path = stored_path_str.clone();
             let output_path = candidate_compressed_path_str.clone();
 
-            tokio::task::spawn_blocking(move ||
+            tokio::task::spawn_blocking(move || {
                 compressor.compress_file(&input_path, &output_path)
-            ).await??;
+            })
+            .await??;
 
-            let candidate_size = tokio::fs::metadata(&candidate_compressed_path).await?.len() as i64;
+            let candidate_size =
+                tokio::fs::metadata(&candidate_compressed_path).await?.len() as i64;
 
             if candidate_size < compressed_size {
                 compressed_path_str = candidate_compressed_path_str;
@@ -139,7 +143,9 @@ impl FileService {
                 let compressed_name = format!("{stored_filename}.zst");
                 let compressed_key = r2_storage.object_key_for_filename(&compressed_name);
                 let compressed_local_path = PathBuf::from(&compressed_path_str);
-                r2_storage.upload_path(&compressed_key, &compressed_local_path).await?;
+                r2_storage
+                    .upload_path(&compressed_key, &compressed_local_path)
+                    .await?;
 
                 db_compressed_path = r2_storage.db_path_for_key(&compressed_key);
                 // compressed object becomes the source of truth in object storage mode.
@@ -149,7 +155,6 @@ impl FileService {
                 db_stored_path = r2_storage.db_path_for_key(&stored_key);
                 db_compressed_path = db_stored_path.clone();
             }
-
 
             if let Some(local_thumbnail_path) = thumbnail_path_str.clone() {
                 let thumbnail_key = r2_storage.object_key_for_filename(&thumbnail_filename);
@@ -186,8 +191,9 @@ impl FileService {
                 original_size,
                 compressed_size,
                 uploaded_by,
-            })
-        ).await?;
+            }),
+        )
+        .await?;
 
         Ok(UploadResult {
             id: file_id,
@@ -222,7 +228,9 @@ impl FileService {
         }
 
         let ext = file_extension(&file.original_name);
-        let temporary_source = self.upload_dir.join(format!(".thumb-source-{}-{}", file.id, Uuid::new_v4()));
+        let temporary_source =
+            self.upload_dir
+                .join(format!(".thumb-source-{}-{}", file.id, Uuid::new_v4()));
         let source_path = if R2StorageService::is_r2_path(&file.stored_path) {
             self.r2_required()?
                 .download_to_path(&file.stored_path, &temporary_source)
@@ -234,7 +242,8 @@ impl FileService {
 
         let thumbnail_filename = format!("file-{}.thumb.jpg", file.id);
         let local_thumbnail = self.upload_dir.join(&thumbnail_filename);
-        let generated = self.media_transcoder
+        let generated = self
+            .media_transcoder
             .generate_video_thumbnail(source_path, &local_thumbnail, &ext)
             .await
             .unwrap_or(false);
@@ -277,8 +286,10 @@ impl FileService {
                 let compressed_path = file.compressed_path.clone();
                 let compressor = self.compressor.clone();
 
-                tokio::task::spawn_blocking(move || compressor.decompress_file_to_bytes(&compressed_path))
-                    .await??
+                tokio::task::spawn_blocking(move || {
+                    compressor.decompress_file_to_bytes(&compressed_path)
+                })
+                .await??
             }
         } else if R2StorageService::is_r2_path(&file.stored_path) {
             let r2_storage = self.r2_required()?;
@@ -360,11 +371,9 @@ impl FileService {
 fn sanitize_filename(name: &str) -> String {
     let sanitized: String = name
         .chars()
-        .map(|ch| {
-            match ch {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
-                _ => '_',
-            }
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
+            _ => '_',
         })
         .collect();
 
@@ -391,15 +400,17 @@ async fn move_file_to_destination(source: &Path, destination: &Path) -> Result<(
     match tokio::fs::rename(source, destination).await {
         Ok(()) => Ok(()),
         Err(rename_error) => {
-            tokio::fs::copy(source, destination).await.map_err(|copy_error| {
-                anyhow!(
-                    "failed to move file from {} to {} (rename: {}; copy: {})",
-                    source.display(),
-                    destination.display(),
-                    rename_error,
-                    copy_error
-                )
-            })?;
+            tokio::fs::copy(source, destination)
+                .await
+                .map_err(|copy_error| {
+                    anyhow!(
+                        "failed to move file from {} to {} (rename: {}; copy: {})",
+                        source.display(),
+                        destination.display(),
+                        rename_error,
+                        copy_error
+                    )
+                })?;
             tokio::fs::remove_file(source).await?;
             Ok(())
         }

@@ -1,8 +1,8 @@
-use axum::serve;
-use axum::{routing::get, Router};
 use crate::app_state::AppState;
 use crate::pages::share_not_found_page;
 use crate::routes;
+use axum::serve;
+use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 use tracing::info;

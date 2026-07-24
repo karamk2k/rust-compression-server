@@ -16,7 +16,7 @@ mod services;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use app_state::AppState;
 use config::{AppConfig, StorageBackend};
 use db::run_migrations;
@@ -62,7 +62,8 @@ async fn main() -> Result<()> {
             Some(storage)
         }
     };
-    let connect_options = SqliteConnectOptions::from_str(&config.database_url)?.create_if_missing(true);
+    let connect_options =
+        SqliteConnectOptions::from_str(&config.database_url)?.create_if_missing(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(connect_options)
@@ -91,6 +92,7 @@ async fn main() -> Result<()> {
         r2_storage,
         upload_dir: config.upload_dir.clone().into(),
         log_file: config.log_file.clone().into(),
+        live_hls_dir: config.live_hls_dir.clone().into(),
         api_token: config.api_token.clone(),
         api_token_user_id,
     };
@@ -144,9 +146,5 @@ fn sqlite_path_from_url(database_url: &str) -> Option<&str> {
     };
 
     let path = path.split('?').next().unwrap_or(path);
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
+    if path.is_empty() { None } else { Some(path) }
 }
