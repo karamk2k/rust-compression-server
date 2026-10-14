@@ -67,6 +67,28 @@ select {
   font-size: 14px;
 }
 
+.realtime-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.realtime-state > span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: #f59e0b;
+}
+
+.realtime-state.connected > span {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgb(34 197 94 / 14%);
+}
+
 .top-actions {
   display: flex;
   gap: 8px;

@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { RealtimeClient, type RealtimeStatus } from '../realtime'
 import {
   clearLogs,
   createFileShare,
@@ -36,6 +37,20 @@ import type {
 
 export type SortMode = 'newest' | 'oldest' | 'name_asc' | 'name_desc' | 'size_desc' | 'size_asc'
 const UPLOAD_REQUEST_CONCURRENCY = 4
+const UPLOAD_RECONCILE_INTERVAL = 15_000
+
+interface UploadCompletedPayload {
+  job_id: number
+  status: 'done'
+}
+
+interface UploadFailedPayload {
+  job_id: number
+  status: 'failed'
+  error: string
+}
+
+type UploadTerminalPayload = UploadCompletedPayload | UploadFailedPayload
 
 function formatError(error: unknown) {
   if (error instanceof Error) return error.message
@@ -44,6 +59,7 @@ function formatError(error: unknown) {
 
 export const useDriveStore = defineStore('drive', () => {
   const username = ref('admin')
+  const realtimeStatus = ref<RealtimeStatus>('idle')
 
   const folders = ref<FolderItem[]>([])
   const folderPath = ref<FolderPathItem[]>([])
@@ -65,6 +81,8 @@ export const useDriveStore = defineStore('drive', () => {
   const sharingFileId = ref<number | null>(null)
 
   const selectedIds = ref<number[]>([])
+  const selectingAllFiles = ref(false)
+  const allFilesSelected = ref(false)
   const activeFileId = ref<number | null>(null)
   const draggedFileId = ref<number | null>(null)
   const dropFolderId = ref<number | null>(null)
@@ -76,9 +94,15 @@ export const useDriveStore = defineStore('drive', () => {
 
   const uploadTasks = ref<UploadTask[]>([])
   const uploadTaskCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const uploadTerminalEvents = new Map<number, UploadTerminalPayload>()
+  const uploadEventWaiters = new Map<number, Set<() => void>>()
+  const activeUploadReconciliations = new Set<number>()
   const toasts = ref<ToastItem[]>([])
   const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
   let toastIdSeq = 0
+  let realtimeInitialized = false
+  let driveRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  const realtime = new RealtimeClient()
 
   const folderMap = computed(() => new Map(folders.value.map((folder) => [folder.id, folder])))
 
@@ -202,6 +226,8 @@ export const useDriveStore = defineStore('drive', () => {
   }
 
   onScopeDispose(() => {
+    realtime.disconnect()
+    if (driveRefreshTimer) clearTimeout(driveRefreshTimer)
     for (const timer of toastTimers.values()) {
       clearTimeout(timer)
     }
@@ -213,11 +239,107 @@ export const useDriveStore = defineStore('drive', () => {
     uploadTaskCleanupTimers.clear()
   })
 
+  function scheduleDriveRefresh() {
+    if (driveRefreshTimer) clearTimeout(driveRefreshTimer)
+    driveRefreshTimer = setTimeout(() => {
+      driveRefreshTimer = null
+      void Promise.all([loadFiles(true), refreshFolders(), refreshSummary()]).catch((error) => {
+        console.error('Failed to reconcile realtime drive state', error)
+      })
+    }, 180)
+  }
+
+  function wakeUploadWaiters(jobId: number) {
+    for (const resolve of uploadEventWaiters.get(jobId) ?? []) resolve()
+    uploadEventWaiters.delete(jobId)
+  }
+
+  function applyUploadTerminalEvent(payload: UploadTerminalPayload) {
+    const task = uploadTasks.value.find((candidate) => candidate.jobId === payload.job_id)
+    if (!task) {
+      uploadTerminalEvents.set(payload.job_id, payload)
+      setTimeout(() => uploadTerminalEvents.delete(payload.job_id), 60_000)
+      scheduleDriveRefresh()
+      return
+    }
+
+    if (payload.status === 'done') {
+      task.status = 'done'
+      scheduleUploadTaskCleanup(task.localId, 4200)
+    } else {
+      task.status = 'failed'
+      task.error = payload.error || 'Processing failed'
+      scheduleUploadTaskCleanup(task.localId, 9000)
+    }
+    wakeUploadWaiters(payload.job_id)
+    scheduleDriveRefresh()
+  }
+
+  function waitForUploadEvent(jobId: number, timeoutMs: number) {
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timeout)
+        uploadEventWaiters.get(jobId)?.delete(finish)
+        resolve()
+      }
+      const timeout = setTimeout(finish, timeoutMs)
+      const waiters = uploadEventWaiters.get(jobId) ?? new Set<() => void>()
+      waiters.add(finish)
+      uploadEventWaiters.set(jobId, waiters)
+    })
+  }
+
+  async function reconcileActiveUploads() {
+    const activeTasks = uploadTasks.value.filter(
+      (task) => task.jobId && task.status === 'processing',
+    )
+    await Promise.allSettled(activeTasks.map((task) => reconcileUploadTask(task)))
+  }
+
+  function initializeRealtime() {
+    if (realtimeInitialized) return
+    realtimeInitialized = true
+
+    realtime.onStatus((status) => {
+      realtimeStatus.value = status
+    })
+    realtime.on<UploadCompletedPayload>('upload.completed', ({ payload }) => {
+      applyUploadTerminalEvent(payload)
+    })
+    realtime.on<UploadFailedPayload>('upload.failed', ({ payload }) => {
+      applyUploadTerminalEvent(payload)
+    })
+
+    for (const event of [
+      'file.created',
+      'file.moved',
+      'file.deleted',
+      'folder.created',
+      'folder.renamed',
+      'folder.moved',
+      'folder.deleted',
+    ]) {
+      realtime.on(event, scheduleDriveRefresh)
+    }
+
+    let connectedBefore = false
+    realtime.on('connection.established', () => {
+      if (connectedBefore) {
+        void reconcileActiveUploads()
+        scheduleDriveRefresh()
+      }
+      connectedBefore = true
+    })
+    realtime.connect()
+  }
+
   function clearSelection() {
     selectedIds.value = []
+    allFilesSelected.value = false
   }
 
   function toggleSelection(id: number) {
+    allFilesSelected.value = false
     if (selectedIds.value.includes(id)) {
       selectedIds.value = selectedIds.value.filter((item) => item !== id)
     } else {
@@ -225,16 +347,46 @@ export const useDriveStore = defineStore('drive', () => {
     }
   }
 
-  function toggleSelectAllVisible() {
-    if (allFilteredSelected.value) {
-      const visible = new Set(filteredFiles.value.map((file) => file.id))
-      selectedIds.value = selectedIds.value.filter((id) => !visible.has(id))
-      return
-    }
+  async function toggleSelectAllFiles() {
+    if (selectingAllFiles.value) return
+    selectingAllFiles.value = true
+    const folderId = currentFolderId.value
+    const query = search.value.trim().toLowerCase()
+    const kindFilter = typeFilter.value
+    const matchingIds: number[] = []
+    let cursor: number | null = null
 
-    const merged = new Set<number>(selectedIds.value)
-    for (const file of filteredFiles.value) merged.add(file.id)
-    selectedIds.value = [...merged]
+    try {
+      let hasMorePages = true
+      while (hasMorePages) {
+        const page = await listFiles(folderId, cursor, 100)
+        matchingIds.push(...page.items
+          .filter((file) => {
+            if (query && !file.original_name.toLowerCase().includes(query)) return false
+            if (kindFilter !== 'all' && inferFileKind(file.original_name) !== kindFilter) return false
+            return true
+          })
+          .map((file) => file.id))
+        cursor = page.next_cursor
+        hasMorePages = page.has_more
+      }
+
+      const selected = new Set(selectedIds.value)
+      const allMatchingSelected = matchingIds.length > 0 && matchingIds.every((id) => selected.has(id))
+      if (allMatchingSelected) {
+        const matching = new Set(matchingIds)
+        selectedIds.value = selectedIds.value.filter((id) => !matching.has(id))
+        allFilesSelected.value = false
+      } else {
+        for (const id of matchingIds) selected.add(id)
+        selectedIds.value = [...selected]
+        allFilesSelected.value = matchingIds.length > 0
+      }
+    } catch (error) {
+      showToast('error', formatError(error))
+    } finally {
+      selectingAllFiles.value = false
+    }
   }
 
   function setActiveFile(id: number | null) {
@@ -334,6 +486,7 @@ export const useDriveStore = defineStore('drive', () => {
   }
 
   async function initialize() {
+    initializeRealtime()
     await Promise.all([refreshMe(), refreshFolders(), refreshSummary()])
     await openFolder(null)
   }
@@ -498,31 +651,58 @@ export const useDriveStore = defineStore('drive', () => {
     await Promise.all(runners)
   }
 
-  async function pollUploadJobUntilDone(task: UploadTask, jobId: number) {
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < 60 * 60 * 1000) {
-      const job = await getUploadJob(jobId)
-      if (job.status === 'done') {
-        task.status = 'done'
-        break
+  async function reconcileUploadTask(task: UploadTask) {
+    const jobId = task.jobId
+    if (!jobId || task.status !== 'processing' || activeUploadReconciliations.has(jobId)) return
+    activeUploadReconciliations.add(jobId)
+
+    try {
+      const earlyEvent = uploadTerminalEvents.get(jobId)
+      if (earlyEvent) {
+        uploadTerminalEvents.delete(jobId)
+        applyUploadTerminalEvent(earlyEvent)
+        return
       }
-      if (job.status === 'failed') {
+
+      const startedAt = Date.now()
+      while (task.status === 'processing' && Date.now() - startedAt < 60 * 60 * 1000) {
+        // WebSocket delivery is the fast path. HTTP is only used periodically to
+        // recover an event lost during a disconnect or a full client queue.
+        const eventWait = waitForUploadEvent(jobId, UPLOAD_RECONCILE_INTERVAL)
+        // Close the race where the terminal event lands between evaluating the
+        // loop condition and registering this waiter.
+        if (task.status !== 'processing') wakeUploadWaiters(jobId)
+        await eventWait
+        if (task.status !== 'processing') return
+
+        let job
+        try {
+          job = await getUploadJob(jobId)
+        } catch (error) {
+          console.warn(`Failed to reconcile upload job ${jobId}`, error)
+          continue
+        }
+        if (job.status === 'done') {
+          applyUploadTerminalEvent({ job_id: jobId, status: 'done' })
+          return
+        }
+        if (job.status === 'failed') {
+          applyUploadTerminalEvent({
+            job_id: jobId,
+            status: 'failed',
+            error: job.error || 'Processing failed',
+          })
+          return
+        }
+      }
+
+      if (task.status === 'processing') {
         task.status = 'failed'
-        task.error = job.error || 'Processing failed'
-        break
+        task.error = 'Upload processing timeout'
+        scheduleUploadTaskCleanup(task.localId, 9000)
       }
-      await new Promise((resolve) => setTimeout(resolve, 1200))
-    }
-
-    if (task.status === 'processing') {
-      task.status = 'failed'
-      task.error = 'Upload processing timeout'
-    }
-
-    if (task.status === 'done') {
-      scheduleUploadTaskCleanup(task.localId, 4200)
-    } else if (task.status === 'failed') {
-      scheduleUploadTaskCleanup(task.localId, 9000)
+    } finally {
+      activeUploadReconciliations.delete(jobId)
     }
   }
 
@@ -530,7 +710,7 @@ export const useDriveStore = defineStore('drive', () => {
     if (!fileList || fileList.length === 0) return
 
     const filesToUpload = [...fileList]
-    const queuedJobs: Array<{ task: UploadTask; jobId: number }> = []
+    const queuedJobs: UploadTask[] = []
 
     await runWithConcurrency(filesToUpload, UPLOAD_REQUEST_CONCURRENCY, async (file) => {
       const localId = `${Date.now()}-${Math.random()}`
@@ -540,8 +720,15 @@ export const useDriveStore = defineStore('drive', () => {
       try {
         task.status = 'uploading'
         const queued = await enqueueUpload(file, currentFolderId.value)
+        task.jobId = queued.job_id
         task.status = 'processing'
-        queuedJobs.push({ task, jobId: queued.job_id })
+        queuedJobs.push(task)
+
+        const earlyEvent = uploadTerminalEvents.get(queued.job_id)
+        if (earlyEvent) {
+          uploadTerminalEvents.delete(queued.job_id)
+          applyUploadTerminalEvent(earlyEvent)
+        }
       } catch (error) {
         task.status = 'failed'
         task.error = formatError(error)
@@ -550,7 +737,7 @@ export const useDriveStore = defineStore('drive', () => {
     })
 
     await Promise.allSettled(
-      queuedJobs.map(({ task, jobId }) => pollUploadJobUntilDone(task, jobId)),
+      queuedJobs.map((task) => reconcileUploadTask(task)),
     )
 
     await Promise.all([loadFiles(true), refreshFolders(), refreshSummary()])
@@ -566,6 +753,7 @@ export const useDriveStore = defineStore('drive', () => {
   }
 
   async function doLogout() {
+    realtime.disconnect()
     await logout()
     window.location.href = '/admin/login'
   }
@@ -588,6 +776,7 @@ export const useDriveStore = defineStore('drive', () => {
 
   return {
     username,
+    realtimeStatus,
     folders,
     folderMap,
     rootFolders,
@@ -606,6 +795,8 @@ export const useDriveStore = defineStore('drive', () => {
     sharingFileId,
 
     selectedIds,
+    selectingAllFiles,
+    allFilesSelected,
     selectedFiles,
     allFilteredSelected,
     activeFile,
@@ -631,7 +822,7 @@ export const useDriveStore = defineStore('drive', () => {
     setActiveFile,
     clearSelection,
     toggleSelection,
-    toggleSelectAllVisible,
+    toggleSelectAllFiles,
     openLightbox,
     closeLightbox,
     lightboxNext,

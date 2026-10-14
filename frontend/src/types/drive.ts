@@ -70,6 +70,7 @@ export type FileKind = 'image' | 'video' | 'doc' | 'audio' | 'other'
 
 export interface UploadTask {
   localId: string
+  jobId?: number
   name: string
   status: 'queued' | 'uploading' | 'processing' | 'done' | 'failed'
   error?: string

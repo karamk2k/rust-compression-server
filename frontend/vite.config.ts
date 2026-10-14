@@ -13,8 +13,10 @@ export default defineConfig({
       input: {
         app: resolve(__dirname, 'index.html'),
         live: resolve(__dirname, 'src/live.ts'),
+        realtime: resolve(__dirname, 'src/realtime.ts'),
       },
       output: {
+        minifyInternalExports: false,
         entryFileNames: '[name].js',
         chunkFileNames: 'chunk-[name].js',
         assetFileNames: (assetInfo) => {

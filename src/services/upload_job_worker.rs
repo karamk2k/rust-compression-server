@@ -7,6 +7,11 @@ use tracing::{error, info};
 
 use crate::app_state::AppState;
 use crate::db;
+use crate::events::{
+    dispatch_to_user,
+    drive::FileCreated,
+    upload::{UploadCompleted, UploadFailed},
+};
 use crate::services::file_service::FileService;
 
 pub async fn spawn(state: AppState, worker_count: usize) {
@@ -121,6 +126,23 @@ async fn process_one(state: &AppState, worker_id: usize) -> Result<bool> {
     match process_result {
         Ok(upload_result) => {
             db::mark_upload_job_done(&state.db, job.id, upload_result.id).await?;
+            dispatch_to_user(
+                &state.websocket_hub,
+                job.uploaded_by,
+                &UploadCompleted {
+                    job_id: job.id,
+                    file: &upload_result,
+                },
+            )
+            .await;
+            dispatch_to_user(
+                &state.websocket_hub,
+                job.uploaded_by,
+                &FileCreated {
+                    file: &upload_result,
+                },
+            )
+            .await;
             info!(
                 worker_id,
                 job_id = job.id,
@@ -133,6 +155,17 @@ async fn process_one(state: &AppState, worker_id: usize) -> Result<bool> {
             let message = format!("{:#}", error);
             let _ = tokio::fs::remove_file(&job.temp_path).await;
             db::mark_upload_job_failed(&state.db, job.id, &message).await?;
+            dispatch_to_user(
+                &state.websocket_hub,
+                job.uploaded_by,
+                &UploadFailed {
+                    job_id: job.id,
+                    original_name: &job.original_name,
+                    folder_id: job.folder_id,
+                    error: &message,
+                },
+            )
+            .await;
             error!(
                 worker_id,
                 job_id = job.id,

@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod controllers;
 mod db;
+mod events;
 mod file_compressor;
 mod folder_watcher;
 mod logging;
@@ -12,6 +13,7 @@ mod repositories;
 mod routes;
 mod server;
 mod services;
+mod websocket;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -30,6 +32,7 @@ use services::r2_storage_service::R2StorageService;
 use services::upload_job_worker;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{error, info};
+use websocket::hub::WebSocketHub;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,6 +49,7 @@ async fn main() -> Result<()> {
         config.ffmpeg_jpeg_quality,
         config.ffmpeg_webp_quality,
     );
+    let websocket_hub = WebSocketHub::new();
     let r2_storage = match config.storage_backend {
         StorageBackend::Local => None,
         StorageBackend::R2 => {
@@ -95,7 +99,10 @@ async fn main() -> Result<()> {
         live_hls_dir: config.live_hls_dir.clone().into(),
         api_token: config.api_token.clone(),
         api_token_user_id,
+        websocket_hub,
     };
+
+    routes::channels_routes::register();
 
     upload_job_worker::spawn(state.clone(), config.upload_worker_concurrency).await;
 

@@ -135,6 +135,24 @@ const currentFolderPathWithRoot = computed(() => {
   return [{ id: null as number | null, name: 'Root' }, ...store.folderPath.map((item) => ({ id: item.id, name: item.name }))]
 })
 
+const moveFolderOptions = computed(() => {
+  const paths = new Map<number, string>()
+  const getPath = (folderId: number): string => {
+    const cached = paths.get(folderId)
+    if (cached) return cached
+    const folder = store.folderMap.get(folderId)
+    if (!folder) return ''
+    const path = folder.parent_id === null
+      ? folder.name
+      : `${getPath(folder.parent_id)} / ${folder.name}`
+    paths.set(folderId, path)
+    return path
+  }
+  return store.folders
+    .map((folder) => ({ id: folder.id, name: getPath(folder.id) }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+})
+
 const selectedCount = computed(() => store.selectedIds.length)
 
 function formatBytes(bytes: number) {
@@ -270,7 +288,7 @@ async function onMoveSelected() {
   }
   const folderId = Number.parseInt(raw, 10)
   if (!Number.isInteger(folderId) || folderId <= 0) {
-    store.showToast('error', 'Select a valid destination folder ID or leave empty for root')
+    store.showToast('error', 'Select a valid destination folder')
     return
   }
   await store.moveSelectedTo(folderId)
@@ -550,7 +568,17 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <div>
         <h1>K2K Drive</h1>
-        <p>Signed in as <strong>{{ store.username }}</strong></p>
+        <p>
+          Signed in as <strong>{{ store.username }}</strong>
+          <span
+            class="realtime-state"
+            :class="store.realtimeStatus"
+            :title="`Realtime: ${store.realtimeStatus}`"
+          >
+            <span aria-hidden="true"></span>
+            {{ store.realtimeStatus === 'connected' ? 'Live' : 'Reconnecting' }}
+          </span>
+        </p>
       </div>
       <div class="top-actions">
         <a class="ghost-link" href="/admin/streams">Live Streams</a>
@@ -661,11 +689,23 @@ onBeforeUnmount(() => {
 
         <div v-if="selectedCount > 0" class="batch-bar">
           <span>{{ selectedCount }} selected</span>
-          <button class="ghost" @click="store.toggleSelectAllVisible">{{ store.allFilteredSelected ? 'Unselect Visible' : 'Select Visible' }}</button>
-          <input v-model="moveTarget" class="move-input" placeholder="Folder ID or empty=root" />
-          <button class="ghost" @click="onMoveSelected" :disabled="store.busyAction">Move Selected</button>
+          <button class="ghost" @click="store.toggleSelectAllFiles" :disabled="store.selectingAllFiles || store.busyAction">
+            {{ store.selectingAllFiles ? 'Selecting...' : store.allFilesSelected ? 'Unselect All' : 'Select All' }}
+          </button>
+          <select v-model="moveTarget" class="select move-destination" aria-label="Move selected files to">
+            <option value="">Root folder</option>
+            <option v-for="folder in moveFolderOptions" :key="folder.id" :value="String(folder.id)">{{ folder.name }}</option>
+          </select>
+          <button class="ghost" @click="onMoveSelected" :disabled="store.busyAction">Move</button>
           <button class="danger" @click="openDeleteSelectedModal" :disabled="store.busyAction">Delete Selected</button>
           <button class="ghost" @click="store.clearSelection">Clear</button>
+        </div>
+
+        <div v-else-if="store.filteredFiles.length > 0" class="batch-bar selection-bar">
+          <span>Select files to move or delete.</span>
+          <button class="ghost" @click="store.toggleSelectAllFiles" :disabled="store.selectingAllFiles || store.busyAction">
+            {{ store.selectingAllFiles ? 'Selecting...' : 'Select All' }}
+          </button>
         </div>
 
         <div v-if="store.loadingFiles" class="empty">Loading files...</div>

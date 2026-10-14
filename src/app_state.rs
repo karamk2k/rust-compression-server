@@ -6,6 +6,7 @@ use crate::config::StorageBackend;
 use crate::file_compressor::FileCompressor;
 use crate::services::media_transcode_service::MediaTranscodeService;
 use crate::services::r2_storage_service::R2StorageService;
+use crate::websocket::hub::WebSocketHub;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,4 +20,5 @@ pub struct AppState {
     pub live_hls_dir: PathBuf,
     pub api_token: Option<String>,
     pub api_token_user_id: Option<i64>,
+    pub websocket_hub: WebSocketHub,
 }
